@@ -452,7 +452,7 @@
               <input id="player-name" placeholder="Player" maxlength="24" />
             </div>
             <div class="field">
-              <label>Room server URL</label>
+              <label>Online room backend URL</label>
               <input id="server-url" value="https://chesstein.jospire1.workers.dev" placeholder="https://chesstein.jospire1.workers.dev" />
             </div>
             <button class="create-btn" onclick="createRoom()">＋ Create Room</button>
@@ -490,6 +490,7 @@
 <script>
 const PUBLIC_ROOMS_KEY = 'chessteinPublicRoomsPreview';
 const WAITING_ROOM_KEY = 'chessteinWaitingRoom';
+const DEFAULT_ROOM_SERVER_URL = 'https://chesstein.jospire1.workers.dev';
 let visibility = 'public';
 let waitSocket = null;
 let waitingRoom = null;
@@ -504,6 +505,9 @@ function generateRoomCode() {
 function getServerUrl() {
   const input = document.getElementById('server-url');
   const value = (input.value || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(value)) {
+    throw new Error('Use the Cloudflare Worker HTTP URL here, for example ' + DEFAULT_ROOM_SERVER_URL);
+  }
   localStorage.setItem('chessteinServerUrl', value);
   return value;
 }
@@ -802,7 +806,8 @@ function escapeHtml(value) {
 
 (function init() {
   const savedServer = localStorage.getItem('chessteinServerUrl');
-  document.getElementById('server-url').value = savedServer || 'https://chesstein.jospire1.workers.dev';
+  const validSavedServer = savedServer && /^https?:\/\//i.test(savedServer) ? savedServer : '';
+  document.getElementById('server-url').value = validSavedServer || DEFAULT_ROOM_SERVER_URL;
   const savedName = localStorage.getItem('chessteinPlayerName');
   if (savedName) document.getElementById('player-name').value = savedName;
 

@@ -789,6 +789,17 @@ function handleSquareClick(idx) {
 }
 
 function requestLegalMoves(idx) {
+  // Online room mode uses the browser's local chess model for move previews.
+  // The Cloudflare room backend is the multiplayer room authority, not the
+  // local Python bridge, so it does not understand bridge-only legal_moves
+  // requests. Actual moves are still sent to the room backend after selection.
+  if (isOnlineGame()) {
+    state.legalMoves = getLocalLegalMoves(idx);
+    state.legalMovesPendingFor = null;
+    buildBoard();
+    return;
+  }
+
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'legal_moves', square: idx }));
   } else {
@@ -1258,7 +1269,7 @@ function handleMessage(msg) {
       break;
 
     case 'error':
-      setStatus('Bridge error: ' + (msg.message || '?'), true);
+      setStatus((isOnlineGame() ? 'Room error: ' : 'Bridge error: ') + (msg.message || '?'), true);
       break;
   }
 }

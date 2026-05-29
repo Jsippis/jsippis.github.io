@@ -430,6 +430,12 @@ export class GameRoom {
         this.send(socket, { type: 'sync', room: publicSnapshot(this.snapshot), sessions: this.publicSessions() });
         break;
 
+      case 'legal_moves':
+        // Older GUI builds sent bridge-only legal move preview requests to the
+        // room backend. Legal move preview is client-side for online rooms;
+        // keep this as a no-op so old clients do not see an error toast.
+        break;
+
       case 'move':
       case 'fen':
       case 'board_update':
