@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chesstein</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --sq-light: #e8dcc8;
+    --sq-dark: #8b6f52;
+    --sq-highlight: #f6f669cc;
+    --sq-selected: #20a8d855;
+    --sq-lastmove: #cdd16e88;
+    --sq-legal: #20202055;
+    --bg: #1a1612;
+    --panel: #221e1a;
+    --border: #3a3228;
+    --text: #e8dcc8;
+    --muted: #8a7a6a;
+    --accent: #c9a227;
+    --ws-ok: #4caf73;
+    --ws-err: #e05a4e;
+    --ws-off: #8a7a6a;
+    --sq: 72px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+    gap: 0;
+  }
+
+  header {
+    width: 100%;
+    max-width: 900px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+
+  .logo {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 300;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+
+  .logo span { color: var(--accent); }
+
+  #ws-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  #ws-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ws-off);
+    transition: background 0.3s;
+  }
+  #ws-dot.ok { background: var(--ws-ok); box-shadow: 0 0 6px var(--ws-ok); }
+  #ws-dot.err { background: var(--ws-err); }
+
+  .main {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 900px;
+  }
+
+  .board-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .board-row {
+    display: flex;
+    align-items: center;
+  }
+
+  .rank-label {
+    width: 22px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+    flex-shrink: 0;
+  }
+
+  .file-labels {
+    display: flex;
+    margin-left: 22px;
+    margin-top: 4px;
+  }
+
+  .file-label {
+    width: var(--sq);
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, var(--sq));
+    grid-template-rows: repeat(8, var(--sq));
+    border: 2px solid var(--border);
+    cursor: default;
+  }
+
+  .sq {
+    width: var(--sq);
+    height: var(--sq);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+    user-select: none;
+    transition: filter 0.1s;
+  }
+
+  .sq.light { background: var(--sq-light); }
+  .sq.dark  { background: var(--sq-dark); }
+  .sq.selected { background: var(--sq-selected) !important; }
+  .sq.lastmove { background: var(--sq-lastmove) !important; }
+  .sq.legal-target::after {
+    content: '';
+    position: absolute;
+    width: 30%;
+    height: 30%;
+    border-radius: 50%;
+    background: var(--sq-legal);
+    pointer-events: none;
+  }
+  .sq.legal-capture::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 5px solid var(--sq-legal);
+    pointer-events: none;
+  }
+  .sq.ai-hint {
+    box-shadow: inset 0 0 0 4px var(--accent);
+  }
+
+  .piece {
+    width: 88%;
+    height: 88%;
+    pointer-events: none;
+    transition: opacity 0.1s;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .piece-img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 200px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }
+
+  .card-title {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  #turn-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .turn-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--muted);
+    flex-shrink: 0;
+  }
+  .turn-dot.white { background: #f0e8d8; border-color: #f0e8d8; }
+  .turn-dot.black { background: #2a2420; border-color: var(--muted); }
+
+  #status-text {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+    min-height: 40px;
+  }
+
+  #status-text.alert { color: var(--accent); }
+
+  .move-history {
+    max-height: 280px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .move-pair {
+    display: grid;
+    grid-template-columns: 28px 1fr 1fr;
+    gap: 4px;
+    font-size: 12px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .move-num { color: var(--muted); }
+  .move-san {
+    padding: 1px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .move-san:hover { background: var(--border); }
+  .move-san.current { color: var(--accent); }
+
+  .captures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    min-height: 28px;
+    align-items: center;
+  }
+
+  .captured-piece {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.45));
+  }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+  }
+
+  button {
+    flex: 1;
+    padding: 8px 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button:active { background: var(--border); }
+
+  #connect-btn {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a1612;
+    font-weight: 500;
+    flex: none;
+    padding: 8px 16px;
+  }
+  #connect-btn:hover { background: #d4a830; border-color: #d4a830; color: #1a1612; }
+
+  #ws-url {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  #ws-url:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+  .conn-row { display: flex; gap: 8px; }
+
+  .promotion-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .promotion-modal.open { display: flex; }
+
+  .promotion-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    display: flex;
+    gap: 12px;
+  }
+
+  .promo-piece {
+    width: 72px;
+    height: 72px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .promo-piece:hover { background: var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Ches<span>stein</span></div>
+  <div id="ws-status">
+    <div id="ws-dot"></div>
+    <span id="ws-label">disconnected</span>
+  </div>
+</header>
+
+<div class="main">
+  <div class="board-wrap">
+    <div id="board"></div>
+    <div class="file-labels">
+      <div class="file-label">a</div><div class="file-label">b</div>
+      <div class="file-label">c</div><div class="file-label">d</div>
+      <div class="file-label">e</div><div class="file-label">f</div>
+      <div class="file-label">g</div><div class="file-label">h</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="card">
+      <div class="card-title">connection</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <input id="ws-url" type="text" value="ws://localhost:8765" />
+        <div class="conn-row">
+          <button id="connect-btn" onclick="toggleConnect()">connect</button>
+          <button onclick="requestNewGame()" title="Resets the GUI/bridge session. Use the physical board reset button for the firmware.">new game</button>
+          <button onclick="flipBoard()">flip</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">status</div>
+      <div id="turn-indicator">
+        <div class="turn-dot white" id="turn-dot"></div>
+        <span id="turn-text">White to move</span>
+      </div>
+      <div style="margin-top:10px;">
+        <div id="status-text">Connect to your Python bridge to start.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">captured</div>
+      <div class="captures" id="captures-white"></div>
+      <div style="height:6px;"></div>
+      <div class="captures" id="captures-black"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">move history</div>
+      <div class="move-history" id="move-history"></div>
+    </div>
+  </div>
+</div>
+
+<div class="promotion-modal" id="promo-modal">
+  <div class="promotion-box" id="promo-box"></div>
+</div>
+
+<script>
+const PIECE_ASSET_BASE = 'assets/pieces/cburnett/';
+const PIECE_IMAGES = {
+  wK:'wK.svg', wQ:'wQ.svg', wR:'wR.svg', wB:'wB.svg', wN:'wN.svg', wP:'wP.svg',
+  bK:'bK.svg', bQ:'bQ.svg', bR:'bR.svg', bB:'bB.svg', bN:'bN.svg', bP:'bP.svg'
+};
+const PIECE_LABELS = {
+  wK:'White king', wQ:'White queen', wR:'White rook', wB:'White bishop', wN:'White knight', wP:'White pawn',
+  bK:'Black king', bQ:'Black queen', bR:'Black rook', bB:'Black bishop', bN:'Black knight', bP:'Black pawn'
+};
+
+function createPieceElement(piece, className = 'piece') {
+  const wrap = document.createElement('div');
+  wrap.className = className;
+
+  const img = document.createElement('img');
+  img.className = 'piece-img';
+  img.src = PIECE_ASSET_BASE + PIECE_IMAGES[piece];
+  img.alt = PIECE_LABELS[piece] || piece;
+  img.draggable = false;
+
+  wrap.appendChild(img);
+  return wrap;
+}
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const START_COUNTS = { wP:8, wN:2, wB:2, wR:2, wQ:1, wK:1, bP:8, bN:2, bB:2, bR:2, bQ:1, bK:1 };
+
+let state = {
+  board: fenToBoard(START_FEN),
+  turn: 'w',
+  selected: null,
+  legalMoves: [],
+  legalMovesPendingFor: null,
+  lastMove: null,
+  aiHint: null,
+  moveHistory: [],
+  flipped: false,
+  fen: START_FEN,
+  captured: { w: [], b: [] },
+  gameOver: false
+};
+
+let ws = null;
+let pendingPromotion = null;
+
+function fenToBoard(fen) {
+  const b = Array(64).fill(null);
+  const rows = fen.split(' ')[0].split('/');
+  // FEN rows are rank8..rank1 (top→bottom), so rows[0]=rank8, rows[7]=rank1.
+  // We store board so index 0 = rank1 (a1), index 63 = rank8 (h8).
+  for (let r = 0; r < 8; r++) {
+    const rank = 7 - r; // rows[0] → rank index 7, rows[7] → rank index 0
+    let c = 0;
+    for (const ch of rows[r]) {
+      if (/\d/.test(ch)) { c += parseInt(ch); }
+      else {
+        const color = ch === ch.toUpperCase() ? 'w' : 'b';
+        const type = ch.toUpperCase();
+        b[rank * 8 + c] = color + type;
+        c++;
+      }
+    }
+  }
+  return b;
+}
+
+function buildBoard() {
+  const el = document.getElementById('board');
+  el.innerHTML = '';
+  const ranks = state.flipped
+    ? [0,1,2,3,4,5,6,7]
+    : [7,6,5,4,3,2,1,0];
+  const files = state.flipped
+    ? [7,6,5,4,3,2,1,0]
+    : [0,1,2,3,4,5,6,7];
+
+  const rankLabelWrap = document.querySelector('.board-wrap');
+  const existingLabels = rankLabelWrap.querySelectorAll('.rank-label');
+  existingLabels.forEach(e => e.remove());
+
+  for (const rank of ranks) {
+    const label = document.createElement('div');
+    label.className = 'rank-label';
+    label.style.cssText = `position:absolute; left:-22px; top:${(state.flipped ? rank : 7-rank)*72}px; height:72px; display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted);`;
+    label.textContent = rank + 1;
+    rankLabelWrap.appendChild(label);
+  }
+
+  for (const rank of ranks) {
+    for (const file of files) {
+      const idx = rank * 8 + file;
+      const sq = document.createElement('div');
+      sq.className = 'sq ' + ((rank + file) % 2 === 0 ? 'dark' : 'light');
+      sq.dataset.idx = idx;
+
+      if (state.lastMove && (state.lastMove[0] === idx || state.lastMove[1] === idx)) {
+        sq.classList.add('lastmove');
+      }
+      if (state.aiHint && (state.aiHint[0] === idx || state.aiHint[1] === idx)) {
+        sq.classList.add('ai-hint');
+      }
+      if (state.selected === idx) {
+        sq.classList.add('selected');
+      }
+      if (state.legalMoves.some(m => m.to === idx)) {
+        sq.classList.add(state.board[idx] ? 'legal-capture' : 'legal-target');
+      }
+
+      const piece = state.board[idx];
+      if (piece) {
+        sq.appendChild(createPieceElement(piece));
+      }
+
+      sq.addEventListener('click', () => handleSquareClick(idx));
+      el.appendChild(sq);
+    }
+  }
+
+  const fileLabelRow = document.querySelector('.file-labels');
+  if (fileLabelRow) {
+    const children = fileLabelRow.children;
+    const labels = ['a','b','c','d','e','f','g','h'];
+    const order = state.flipped ? [...labels].reverse() : labels;
+    for (let i = 0; i < children.length; i++) {
+      children[i].textContent = order[i];
+    }
+  }
+
+  updateCaptured();
+  updateHistory();
+  updateTurn();
+}
+
+function handleSquareClick(idx) {
+  if (state.gameOver) return;
+
+  const existingMove = state.legalMoves.find(m => m.to === idx);
+
+  if (existingMove) {
+    if (existingMove.promotion) {
+      showPromotion(state.selected, idx);
+      return;
+    }
+    executeMove(state.selected, idx, null);
+    return;
+  }
+
+  const piece = state.board[idx];
+  if (piece && piece[0] === state.turn) {
+    state.selected = idx;
+    state.legalMoves = [];
+    state.legalMovesPendingFor = idx;
+    buildBoard();
+    requestLegalMoves(idx);
+  } else {
+    state.selected = null;
+    state.legalMoves = [];
+    state.legalMovesPendingFor = null;
+    buildBoard();
+  }
+}
+
+function requestLegalMoves(idx) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'legal_moves', square: idx }));
+  } else {
+    state.legalMoves = getLocalLegalMoves(idx);
+    state.legalMovesPendingFor = null;
+    buildBoard();
+  }
+}
+
+function executeMove(from, to, promotion) {
+  const uci = idxToAlg(from) + idxToAlg(to) + (promotion || '');
+  state.selected = null;
+  state.legalMoves = [];
+  state.legalMovesPendingFor = null;
+  state.aiHint = null;
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'move', uci }));
+  } else {
+    applyLocalMove(from, to, promotion);
+  }
+}
+
+function idxToAlg(idx) {
+  const file = String.fromCharCode(97 + (idx % 8));
+  const rank = Math.floor(idx / 8) + 1;
+  return file + rank;
+}
+
+function algToIdx(alg) {
+  const file = alg.charCodeAt(0) - 97;
+  const rank = parseInt(alg[1]) - 1;
+  return rank * 8 + file;
+}
+
+function showPromotion(from, to) {
+  pendingPromotion = { from, to };
+  const color = state.turn;
+  const pieces = color === 'w'
+    ? ['wQ','wR','wB','wN']
+    : ['bQ','bR','bB','bN'];
+  const box = document.getElementById('promo-box');
+  box.innerHTML = '';
+  pieces.forEach(p => {
+    const d = createPieceElement(p, 'promo-piece');
+    d.onclick = () => {
+      document.getElementById('promo-modal').classList.remove('open');
+      executeMove(pendingPromotion.from, pendingPromotion.to, p[1].toLowerCase());
+      pendingPromotion = null;
+    };
+    box.appendChild(d);
+  });
+  document.getElementById('promo-modal').classList.add('open');
+}
+
+function applyLocalMove(from, to, promotion) {
+  const piece = state.board[from];
+  const captured = state.board[to];
+
+  if (captured) {
+    state.captured[piece[0]].push(captured);
+  }
+
+  state.board[to] = promotion
+    ? piece[0] + promotion.toUpperCase()
+    : piece;
+  state.board[from] = null;
+
+  if (piece[1] === 'K') {
+    const diff = to - from;
+    if (diff === 2) { state.board[from+1] = state.board[from+3]; state.board[from+3] = null; }
+    if (diff === -2) { state.board[from-1] = state.board[from-4]; state.board[from-4] = null; }
+  }
+
+  const moveNum = Math.ceil((state.moveHistory.length + 1) / 2);
+  const san = generateSAN(from, to, piece, captured, promotion);
+  state.moveHistory.push({ from, to, san, piece, moveNum });
+  state.lastMove = [from, to];
+  state.turn = state.turn === 'w' ? 'b' : 'w';
+  buildBoard();
+}
+
+function generateSAN(from, to, piece, captured, promotion) {
+  let san = '';
+  if (piece[1] !== 'P') san += piece[1];
+  if (captured) san += 'x';
+  san += idxToAlg(to);
+  if (promotion) san += '=' + promotion.toUpperCase();
+  return san;
+}
+
+function getLocalLegalMoves(idx) {
+  const moves = [];
+  const piece = state.board[idx];
+  if (!piece) return moves;
+
+  const type = piece[1];
+  const color = piece[0];
+  const rank = Math.floor(idx / 8);
+  const file = idx % 8;
+
+  function tryAdd(to) {
+    if (to < 0 || to > 63) return false;
+    const target = state.board[to];
+    if (target && target[0] === color) return false;
+    const isCapture = !!target;
+    moves.push({ from: idx, to, promotion: isPromotion(piece, to) });
+    return !isCapture;
+  }
+
+  function slide(dr, df) {
+    let r = rank + dr, f = file + df;
+    while (r >= 0 && r < 8 && f >= 0 && f < 8) {
+      const to = r * 8 + f;
+      if (!tryAdd(to)) break;
+      r += dr; f += df;
+    }
+  }
+
+  if (type === 'P') {
+    const dir = color === 'w' ? 1 : -1;
+    const startRank = color === 'w' ? 1 : 6;
+    const fwd = idx + dir * 8;
+    if (fwd >= 0 && fwd < 64 && !state.board[fwd]) {
+      moves.push({ from: idx, to: fwd, promotion: isPromotion(piece, fwd) });
+      if (rank === startRank) {
+        const fwd2 = fwd + dir * 8;
+        if (!state.board[fwd2]) moves.push({ from: idx, to: fwd2, promotion: false });
+      }
+    }
+    [[dir, -1],[dir, 1]].forEach(([dr, df]) => {
+      const tf = file + df;
+      if (tf < 0 || tf > 7) return;
+      const to = (rank + dr) * 8 + tf;
+      if (state.board[to] && state.board[to][0] !== color) {
+        moves.push({ from: idx, to, promotion: isPromotion(piece, to) });
+      }
+    });
+  }
+
+  if (type === 'N') {
+    [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(([dr,df]) => {
+      const r = rank+dr, f = file+df;
+      if (r>=0&&r<8&&f>=0&&f<8) tryAdd(r*8+f);
+    });
+  }
+
+  if (type === 'B' || type === 'Q') {
+    [[-1,-1],[-1,1],[1,-1],[1,1]].forEach(([dr,df]) => slide(dr,df));
+  }
+
+  if (type === 'R' || type === 'Q') {
+    [[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr,df]) => slide(dr,df));
+  }
+
+  if (type === 'K') {
+    [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]].forEach(([dr,df]) => {
+      const r = rank+dr, f = file+df;
+      if (r>=0&&r<8&&f>=0&&f<8) tryAdd(r*8+f);
+    });
+    if (color === 'w' && idx === 4) {
+      if (!state.board[5]&&!state.board[6]&&state.board[7]==='wR') moves.push({from:4,to:6,promotion:false});
+      if (!state.board[3]&&!state.board[2]&&!state.board[1]&&state.board[0]==='wR') moves.push({from:4,to:2,promotion:false});
+    }
+    if (color === 'b' && idx === 60) {
+      if (!state.board[61]&&!state.board[62]&&state.board[63]==='bR') moves.push({from:60,to:62,promotion:false});
+      if (!state.board[59]&&!state.board[58]&&!state.board[57]&&state.board[56]==='bR') moves.push({from:60,to:58,promotion:false});
+    }
+  }
+
+  return moves;
+}
+
+function isPromotion(piece, to) {
+  if (piece[1] !== 'P') return false;
+  const rank = Math.floor(to / 8);
+  return (piece[0] === 'w' && rank === 7) || (piece[0] === 'b' && rank === 0);
+}
+
+function updateTurn() {
+  const dot = document.getElementById('turn-dot');
+  const text = document.getElementById('turn-text');
+  dot.className = 'turn-dot ' + (state.turn === 'w' ? 'white' : 'black');
+  text.textContent = state.turn === 'w' ? 'White to move' : 'Black to move';
+}
+
+function updateHistory() {
+  const el = document.getElementById('move-history');
+  el.innerHTML = '';
+  const pairs = [];
+  for (let i = 0; i < state.moveHistory.length; i += 2) {
+    pairs.push({
+      num: Math.ceil((i+1)/2),
+      w: state.moveHistory[i],
+      b: state.moveHistory[i+1]
+    });
+  }
+  pairs.forEach((pair, pi) => {
+    const row = document.createElement('div');
+    row.className = 'move-pair';
+    row.innerHTML = `<span class="move-num">${pair.num}.</span>
+      <span class="move-san${pi===pairs.length-1&&state.turn==='b' ? ' current' : ''}">${pair.w ? pair.w.san : ''}</span>
+      <span class="move-san${pair.b&&pi===pairs.length-1 ? ' current' : ''}">${pair.b ? pair.b.san : ''}</span>`;
+    el.appendChild(row);
+  });
+  el.scrollTop = el.scrollHeight;
+}
+
+function computeCapturedFromBoard() {
+  const counts = {};
+  Object.keys(START_COUNTS).forEach(k => counts[k] = 0);
+  state.board.forEach(piece => {
+    if (piece && counts[piece] !== undefined) counts[piece]++;
+  });
+
+  const order = ['Q', 'R', 'B', 'N', 'P'];
+  const captured = { w: [], b: [] };
+  ['w', 'b'].forEach(color => {
+    order.forEach(type => {
+      const key = color + type;
+      const missing = (START_COUNTS[key] || 0) - (counts[key] || 0);
+      for (let i = 0; i < missing; i++) captured[color].push(key);
+    });
+  });
+  return captured;
+}
+
+function updateCaptured() {
+  ['w','b'].forEach(color => {
+    const el = document.getElementById('captures-' + (color === 'w' ? 'white' : 'black'));
+    el.innerHTML = '';
+    state.captured[color].forEach(piece => {
+      el.appendChild(createPieceElement(piece, 'captured-piece'));
+    });
+  });
+}
+
+function setStatus(msg, alert = false) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.className = alert ? 'alert' : '';
+}
+
+function resetLocalState(statusText = 'New game started.') {
+  state.board = fenToBoard(START_FEN);
+  state.turn = 'w';
+  state.selected = null;
+  state.legalMoves = [];
+  state.legalMovesPendingFor = null;
+  state.lastMove = null;
+  state.aiHint = null;
+  state.moveHistory = [];
+  state.captured = { w: [], b: [] };
+  state.gameOver = false;
+  state.fen = START_FEN;
+  buildBoard();
+  setStatus(statusText);
+}
+
+function requestNewGame() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    setStatus('Resetting the bridge session. Use the board reset button too if the physical firmware is mid-game.');
+    ws.send(JSON.stringify({ type: 'new_game' }));
+    return;
+  }
+
+  resetLocalState('New local GUI game started.');
+}
+
+function flipBoard() {
+  state.flipped = !state.flipped;
+  buildBoard();
+}
+
+function toggleConnect() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+    return;
+  }
+  const url = document.getElementById('ws-url').value;
+  connect(url);
+}
+
+function connect(url) {
+  try {
+    ws = new WebSocket(url);
+  } catch(e) {
+    setWsStatus('err', 'invalid url');
+    return;
+  }
+
+  setWsStatus('connecting', 'connecting…');
+
+  ws.onopen = () => {
+    setWsStatus('ok', 'connected');
+    document.getElementById('connect-btn').textContent = 'disconnect';
+    setStatus('Bridge connected. Ready to play.');
+    ws.send(JSON.stringify({ type: 'hello', version: 1 }));
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      handleMessage(msg);
+    } catch(err) {
+      console.warn('Bad message:', e.data);
+    }
+  };
+
+  ws.onclose = () => {
+    setWsStatus('off', 'disconnected');
+    document.getElementById('connect-btn').textContent = 'connect';
+    setStatus('Disconnected. Moves will be applied locally.');
+  };
+
+  ws.onerror = () => {
+    setWsStatus('err', 'error');
+  };
+}
+
+function setWsStatus(state, label) {
+  const dot = document.getElementById('ws-dot');
+  const lbl = document.getElementById('ws-label');
+  dot.className = state === 'ok' ? 'ok' : state === 'err' ? 'err' : '';
+  lbl.textContent = label;
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'game_reset':
+      applyServerState({
+        fen: msg.fen || START_FEN,
+        turn: msg.turn || 'w',
+        history: msg.history || [],
+        last_move: msg.last_move || null
+      }, { reset: true, silent: true });
+      setStatus(msg.message || 'Board/bridge session reset. Ready to play.');
+      break;
+
+    case 'state':
+      applyServerState(msg);
+      break;
+
+    case 'status':
+      setStatus(msg.message || '');
+      break;
+
+    case 'legal_moves': {
+      const square = Number(msg.square);
+      if (Number.isInteger(square) && state.selected !== square) {
+        return;
+      }
+      state.legalMoves = movesFromUciList(msg.moves || []);
+      state.legalMovesPendingFor = null;
+      buildBoard();
+      break;
+    }
+
+    case 'physical_lift':
+      applyPhysicalLiftMessage(msg);
+      break;
+
+    case 'physical_place':
+      applyPhysicalPlaceMessage(msg);
+      break;
+
+    case 'move_ok':
+      applyMoveMessage(msg);
+      setStatus(msg.san ? `Move played: ${msg.san}` : 'Move played.');
+      break;
+
+    case 'move_illegal':
+      setStatus('Illegal move.', true);
+      state.selected = null;
+      state.legalMoves = [];
+      state.legalMovesPendingFor = null;
+      buildBoard();
+      break;
+
+    case 'ai_hint':
+      if (msg.uci) {
+        state.aiHint = [algToIdx(msg.uci.slice(0,2)), algToIdx(msg.uci.slice(2,4))];
+      }
+      if (Array.isArray(msg.history)) setHistoryFromSans(msg.history);
+      setStatus(msg.message || (msg.uci ? `Stockfish suggests ${msg.uci}.` : 'Stockfish suggestion received.'));
+      buildBoard();
+      break;
+
+    case 'ai_move':
+      applyMoveMessage(msg);
+      setStatus(`Stockfish played: ${msg.san || msg.uci || ''}`);
+      break;
+
+    case 'game_over':
+      state.gameOver = true;
+      setStatus(msg.reason || 'Game over.', true);
+      break;
+
+    case 'board_move':
+      applyMoveMessage(msg);
+      if (msg.san) {
+        setStatus(`Physical board move: ${msg.san}`);
+      } else if (msg.uci) {
+        setStatus(`Physical board move: ${msg.uci}`);
+      } else {
+        setStatus('Physical board synced.');
+      }
+      break;
+
+    case 'error':
+      setStatus('Bridge error: ' + (msg.message || '?'), true);
+      break;
+  }
+}
+
+
+function movesFromUciList(moves) {
+  return moves.map(uci => ({
+    from: algToIdx(uci.slice(0,2)),
+    to: algToIdx(uci.slice(2,4)),
+    promotion: uci.length === 5
+  }));
+}
+
+function setHistoryFromSans(history) {
+  state.moveHistory = history.map((san, i) => ({
+    san,
+    moveNum: Math.ceil((i + 1) / 2)
+  }));
+}
+
+function appendMoveFallback(msg) {
+  if (!msg.san) return;
+  const last = state.moveHistory[state.moveHistory.length - 1];
+  if (last && last.san === msg.san) return;
+  const num = Math.ceil((state.moveHistory.length + 1) / 2);
+  state.moveHistory.push({ san: msg.san, moveNum: num });
+}
+
+function setLastMoveFromUci(uci) {
+  if (!uci || uci.length < 4) {
+    state.lastMove = null;
+    return;
+  }
+  state.lastMove = [algToIdx(uci.slice(0,2)), algToIdx(uci.slice(2,4))];
+}
+
+function applyPhysicalLiftMessage(msg) {
+  if (msg.fen) applyFen(msg.fen);
+  if (msg.turn) state.turn = msg.turn;
+  if (Array.isArray(msg.history)) setHistoryFromSans(msg.history);
+
+  const square = Number(msg.square);
+  if (!Number.isInteger(square)) return;
+
+  state.selected = square;
+  state.legalMoves = movesFromUciList(msg.moves || []);
+  state.legalMovesPendingFor = null;
+  state.gameOver = false;
+
+  buildBoard();
+  setStatus(msg.message || `Piece lifted on ${idxToAlg(square).toUpperCase()}.`);
+}
+
+function applyPhysicalPlaceMessage(msg) {
+  if (msg.fen) applyFen(msg.fen);
+  if (msg.turn) state.turn = msg.turn;
+  if (Array.isArray(msg.history)) setHistoryFromSans(msg.history);
+
+  const square = Number(msg.square);
+  const shouldClearSelection = msg.clears_selection || (
+    Number.isInteger(square) && state.selected === square
+  );
+
+  if (shouldClearSelection) {
+    state.selected = null;
+    state.legalMoves = [];
+    state.legalMovesPendingFor = null;
+    buildBoard();
+    setStatus(msg.message || 'Piece returned.');
+  }
+}
+
+function applyMoveMessage(msg) {
+  state.selected = null;
+  state.legalMoves = [];
+  state.legalMovesPendingFor = null;
+  state.aiHint = null;
+  state.gameOver = false;
+
+  if (msg.fen) applyFen(msg.fen);
+  if (msg.turn) state.turn = msg.turn;
+
+  if (Array.isArray(msg.history)) {
+    setHistoryFromSans(msg.history);
+  } else {
+    appendMoveFallback(msg);
+  }
+
+  setLastMoveFromUci(msg.last_move || msg.uci || null);
+  buildBoard();
+}
+
+function applyServerState(msg, options = {}) {
+  state.selected = null;
+  state.legalMoves = [];
+  state.legalMovesPendingFor = null;
+  state.gameOver = false;
+  state.lastMove = null;
+  state.aiHint = null;
+
+  if (msg.fen) applyFen(msg.fen);
+  if (msg.turn) state.turn = msg.turn;
+  if (Array.isArray(msg.history)) {
+    setHistoryFromSans(msg.history);
+  } else if (options.reset) {
+    state.moveHistory = [];
+  }
+
+  if (msg.last_move) {
+    setLastMoveFromUci(msg.last_move);
+  }
+  buildBoard();
+  if (!options.silent) setStatus(options.reset ? 'Board was reset. Ready to play.' : 'Board state synced from bridge.');
+}
+
+function applyFen(fen) {
+  state.board = fenToBoard(fen);
+  const parts = fen.split(' ');
+  if (parts[1]) state.turn = parts[1];
+  state.fen = fen;
+  state.captured = computeCapturedFromBoard();
+}
+
+buildBoard();
+setStatus('Connect to your Python bridge to start.');
+</script>
+</body>
+</html>
