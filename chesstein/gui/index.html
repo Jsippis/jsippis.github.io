@@ -356,6 +356,32 @@
 
   .conn-row { display: flex; gap: 8px; }
 
+  .online-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .online-meta div {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    color: var(--muted);
+  }
+  .online-meta strong {
+    display: block;
+    color: var(--text);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .game-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .game-actions button.danger { border-color: rgba(224, 90, 78, 0.6); color: #f0aaa3; }
+  .game-actions button.danger:hover { border-color: var(--ws-err); color: var(--ws-err); }
+
   .promotion-modal {
     display: none;
     position: fixed;
@@ -432,7 +458,7 @@
         <input id="ws-url" type="text" value="ws://localhost:8765" />
         <div class="conn-row">
           <button id="connect-btn" onclick="toggleConnect()">connect</button>
-          <button onclick="requestNewGame()" title="Resets the GUI/bridge session. Use the physical board reset button for the firmware.">new game</button>
+          <button id="new-game-btn" onclick="requestNewGame()" title="Resets the GUI/bridge session. Use the physical board reset button for the firmware.">new game</button>
           <button onclick="flipBoard()">flip</button>
         </div>
       </div>
@@ -446,6 +472,20 @@
       </div>
       <div style="margin-top:10px;">
         <div id="status-text">Connect to your Python bridge to start.</div>
+      </div>
+    </div>
+
+    <div class="card" id="online-card" style="display:none;">
+      <div class="card-title">online room</div>
+      <div class="online-meta">
+        <div>Room<strong id="online-room-code">—</strong></div>
+        <div>You are<strong id="online-player-color">—</strong></div>
+        <div>Status<strong id="online-room-status">—</strong></div>
+        <div>Opponent<strong id="online-opponent">—</strong></div>
+      </div>
+      <div class="game-actions" id="online-actions" style="display:none;">
+        <button onclick="offerDraw()">offer draw</button>
+        <button class="danger" onclick="resignGame()">resign</button>
       </div>
     </div>
 
@@ -515,7 +555,10 @@ let state = {
   flipped: false,
   fen: START_FEN,
   captured: { w: [], b: [] },
-  gameOver: false
+  gameOver: false,
+  playerColor: null,
+  roomStatus: null,
+  opponentConnected: false
 };
 
 let ws = null;
@@ -525,12 +568,17 @@ const query = new URLSearchParams(window.location.search);
 const launchMode = query.get('mode') || 'bridge';
 const launchRoom = (query.get('room') || '').trim().toUpperCase();
 const launchVisibility = query.get('visibility') || '';
+const launchColor = (query.get('color') || '').toLowerCase();
 
 function describeLaunchMode() {
   if (launchMode === 'ai') return 'vs ai';
   if (launchMode === 'local') return 'local';
-  if (launchMode === 'room') return launchRoom ? `room ${launchRoom}` : 'room';
+  if (launchMode === 'online' || launchMode === 'room') return launchRoom ? `room ${launchRoom}` : 'online';
   return 'bridge';
+}
+
+function isOnlineGame() {
+  return launchMode === 'online' || launchMode === 'room';
 }
 
 function getInitialStatusText() {
@@ -540,10 +588,9 @@ function getInitialStatusText() {
   if (launchMode === 'local') {
     return 'Local browser mode. Play both sides on this device.';
   }
-  if (launchMode === 'room') {
-    const visibility = launchVisibility ? `${launchVisibility} ` : '';
+  if (isOnlineGame()) {
     const room = launchRoom ? ` ${launchRoom}` : '';
-    return `${visibility}room${room}. Online room sync is a placeholder until the multiplayer server is added.`;
+    return `Online room${room}. Waiting for room sync.`;
   }
   return 'Connect to your Python bridge to start.';
 }
@@ -555,12 +602,20 @@ function applyLaunchParams() {
   const urlInput = document.getElementById('ws-url');
   const savedBridge = localStorage.getItem('chessteinBridgeUrl');
   const requestedBridge = query.get('bridge');
-  const bridgeUrl = requestedBridge || savedBridge || urlInput.value || 'ws://localhost:8765';
+  const requestedWs = query.get('ws');
+  const bridgeUrl = requestedWs || requestedBridge || savedBridge || urlInput.value || 'ws://localhost:8765';
   urlInput.value = bridgeUrl;
+
+  if (isOnlineGame()) {
+    state.playerColor = launchColor || null;
+    document.getElementById('online-card').style.display = '';
+    document.getElementById('new-game-btn').style.display = 'none';
+    updateOnlineMeta();
+  }
 
   setStatus(getInitialStatusText());
 
-  if (query.get('connect') === '1') {
+  if (query.get('connect') === '1' || (isOnlineGame() && requestedWs)) {
     connect(bridgeUrl);
   }
 }
@@ -584,6 +639,28 @@ function fenToBoard(fen) {
     }
   }
   return b;
+}
+
+function boardToFen() {
+  const rows = [];
+  for (let rank = 7; rank >= 0; rank--) {
+    let row = '';
+    let empty = 0;
+    for (let file = 0; file < 8; file++) {
+      const piece = state.board[rank * 8 + file];
+      if (!piece) {
+        empty++;
+        continue;
+      }
+      if (empty) { row += String(empty); empty = 0; }
+      const type = piece[1];
+      row += piece[0] === 'w' ? type : type.toLowerCase();
+    }
+    if (empty) row += String(empty);
+    rows.push(row);
+  }
+  // Castling/en-passant are not tracked by the browser-only move helper yet.
+  return `${rows.join('/')} ${state.turn} - - 0 1`;
 }
 
 function buildBoard() {
@@ -655,6 +732,13 @@ function buildBoard() {
 
 function handleSquareClick(idx) {
   if (state.gameOver) return;
+  if (isOnlineGame() && state.playerColor) {
+    const myTurn = state.playerColor === 'white' ? 'w' : state.playerColor === 'black' ? 'b' : null;
+    if (myTurn && state.turn !== myTurn) {
+      setStatus('Waiting for opponent.');
+      return;
+    }
+  }
 
   const existingMove = state.legalMoves.find(m => m.to === idx);
 
@@ -699,10 +783,20 @@ function executeMove(from, to, promotion) {
   state.legalMovesPendingFor = null;
   state.aiHint = null;
 
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN && !isOnlineGame()) {
     ws.send(JSON.stringify({ type: 'move', uci }));
-  } else {
-    applyLocalMove(from, to, promotion);
+    return;
+  }
+
+  applyLocalMove(from, to, promotion);
+
+  if (ws && ws.readyState === WebSocket.OPEN && isOnlineGame()) {
+    ws.send(JSON.stringify({
+      type: 'move',
+      uci,
+      fen: boardToFen(),
+      history: state.moveHistory.map(move => move.san).filter(Boolean)
+    }));
   }
 }
 
@@ -943,6 +1037,10 @@ function resetLocalState(statusText = 'New game started.') {
 }
 
 function requestNewGame() {
+  if (isOnlineGame()) {
+    setStatus('New game is only available after an online game has ended.');
+    return;
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     setStatus('Resetting the bridge session. Use the board reset button too if the physical firmware is mid-game.');
     ws.send(JSON.stringify({ type: 'new_game' }));
@@ -980,8 +1078,8 @@ function connect(url) {
   ws.onopen = () => {
     setWsStatus('ok', 'connected');
     document.getElementById('connect-btn').textContent = 'disconnect';
-    setStatus('Bridge connected. Ready to play.');
-    ws.send(JSON.stringify({ type: 'hello', version: 1 }));
+    setStatus(isOnlineGame() ? 'Online room connected.' : 'Bridge connected. Ready to play.');
+    ws.send(JSON.stringify(isOnlineGame() ? { type: 'request_sync' } : { type: 'hello', version: 1 }));
   };
 
   ws.onmessage = (e) => {
@@ -996,7 +1094,7 @@ function connect(url) {
   ws.onclose = () => {
     setWsStatus('off', 'disconnected');
     document.getElementById('connect-btn').textContent = 'connect';
-    setStatus(launchMode === 'local' ? 'Local browser mode. Play both sides on this device.' : 'Disconnected. Moves will be applied locally.');
+    setStatus(launchMode === 'local' ? 'Local browser mode. Play both sides on this device.' : isOnlineGame() ? 'Online room disconnected.' : 'Disconnected. Moves will be applied locally.');
   };
 
   ws.onerror = () => {
@@ -1013,6 +1111,36 @@ function setWsStatus(state, label) {
 
 function handleMessage(msg) {
   switch (msg.type) {
+    case 'welcome':
+      if (msg.playerColor) state.playerColor = msg.playerColor;
+      if (msg.room) applyOnlineRoom(msg.room);
+      setStatus(isOnlineGame() ? 'Online room synced.' : 'Connected.');
+      break;
+
+    case 'sync':
+      if (msg.room) applyOnlineRoom(msg.room);
+      break;
+
+    case 'presence':
+      if (msg.room) applyOnlinePresence(msg.room);
+      break;
+
+    case 'game_started':
+      if (msg.playerColor) state.playerColor = msg.playerColor;
+      if (msg.room) applyOnlineRoom(msg.room);
+      setStatus('Game started.');
+      break;
+
+    case 'room_update':
+      if (msg.room) applyOnlineRoom(msg.room);
+      break;
+
+    case 'cancelled':
+    case 'room_closed':
+      state.gameOver = true;
+      setStatus('Room was closed.', true);
+      break;
+
     case 'game_reset':
       applyServerState({
         fen: msg.fen || START_FEN,
@@ -1099,6 +1227,55 @@ function handleMessage(msg) {
   }
 }
 
+
+
+function normalizeFenForGui(fen) {
+  return fen === 'startpos' ? START_FEN : fen;
+}
+
+function applyOnlineRoom(room) {
+  if (!room) return;
+  state.roomStatus = room.status || state.roomStatus;
+  if (room.fen) applyFen(normalizeFenForGui(room.fen));
+  if (Array.isArray(room.history)) {
+    setHistoryFromSans(room.history.map(item => typeof item === 'string' ? item : (item.san || item.uci || '')).filter(Boolean));
+  }
+  state.gameOver = ['finished', 'cancelled', 'abandoned'].includes(room.status);
+  applyOnlinePresence(room);
+  buildBoard();
+}
+
+function applyOnlinePresence(room) {
+  const myColor = state.playerColor;
+  const otherColor = myColor === 'white' ? 'black' : myColor === 'black' ? 'white' : null;
+  const opponent = otherColor ? room.players?.[otherColor] : null;
+  state.opponentConnected = !!opponent?.connected;
+  state.roomStatus = room.status || state.roomStatus;
+  updateOnlineMeta(room);
+}
+
+function updateOnlineMeta(room = {}) {
+  const card = document.getElementById('online-card');
+  if (!card) return;
+  const code = room.roomCode || launchRoom || '—';
+  const color = state.playerColor || launchColor || '—';
+  const status = room.status || state.roomStatus || '—';
+  const opponentText = state.opponentConnected ? 'connected' : status === 'waiting' ? 'waiting' : 'disconnected';
+  document.getElementById('online-room-code').textContent = code;
+  document.getElementById('online-player-color').textContent = color;
+  document.getElementById('online-room-status').textContent = status;
+  document.getElementById('online-opponent').textContent = opponentText;
+  const actions = document.getElementById('online-actions');
+  if (actions) actions.style.display = status === 'active' ? '' : 'none';
+}
+
+function offerDraw() {
+  setStatus('Draw offers are planned for the next online pass.');
+}
+
+function resignGame() {
+  setStatus('Resign is planned for the next online pass.');
+}
 
 function movesFromUciList(moves) {
   return moves.map(uci => ({

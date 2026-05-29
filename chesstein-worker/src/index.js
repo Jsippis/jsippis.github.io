@@ -20,7 +20,7 @@ function corsHeaders(request, env) {
 
   return {
     'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
@@ -108,19 +108,15 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/rooms') {
       const body = await parseJson(request);
       const visibility = body.visibility === 'private' ? 'private' : 'public';
-      const mode = body.mode === 'ai' ? 'ai' : 'multiplayer';
       const roomCode = makeRoomCode();
-      const now = Date.now();
+      const playerToken = crypto.randomUUID();
 
       const initPayload = {
         roomCode,
         visibility,
-        mode,
-        createdAt: now,
-        updatedAt: now,
-        status: 'waiting',
-        fen: 'startpos',
-        history: [],
+        playerToken,
+        name: String(body.name || 'Player').slice(0, 32),
+        clientType: body.clientType || 'gui',
       };
 
       const room = getRoomStub(env, roomCode);
@@ -134,22 +130,16 @@ export default {
         return jsonResponse(request, env, { ok: false, error: 'room_init_failed' }, 500);
       }
 
-      if (visibility === 'public') {
-        const lobby = getLobbyStub(env);
-        await lobby.fetch(new Request('https://lobby/rooms', {
-          method: 'POST',
-          headers: JSON_HEADERS,
-          body: JSON.stringify(initPayload),
-        }));
-      }
-
+      const initData = await initResponse.json();
       const wsProtocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       return jsonResponse(request, env, {
         ok: true,
-        room: initPayload,
+        room: initData.room,
         roomCode,
+        playerToken,
+        color: 'white',
         roomUrl: `${url.origin}/api/rooms/${roomCode}`,
-        wsUrl: `${wsProtocol}//${url.host}/ws/rooms/${roomCode}`,
+        wsUrl: `${wsProtocol}//${url.host}/ws/rooms/${roomCode}?token=${encodeURIComponent(playerToken)}&client=gui`,
       }, 201);
     }
 
@@ -157,6 +147,14 @@ export default {
     if (apiRoomCode && request.method === 'GET') {
       const room = getRoomStub(env, apiRoomCode);
       const response = await room.fetch(new Request(`https://room/snapshot?roomCode=${apiRoomCode}`, { method: 'GET' }));
+      const data = await response.json();
+      return jsonResponse(request, env, data, response.status);
+    }
+
+    if (apiRoomCode && request.method === 'DELETE') {
+      const room = getRoomStub(env, apiRoomCode);
+      const token = url.searchParams.get('token') || '';
+      const response = await room.fetch(new Request(`https://room/cancel?roomCode=${apiRoomCode}&token=${encodeURIComponent(token)}`, { method: 'DELETE' }));
       const data = await response.json();
       return jsonResponse(request, env, data, response.status);
     }

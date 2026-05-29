@@ -34,7 +34,7 @@
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
 
-  button, input, select { font: inherit; }
+  button, input { font: inherit; }
   button { cursor: pointer; }
   a { color: inherit; }
 
@@ -70,7 +70,8 @@
     box-shadow: 0 10px 30px rgba(245, 164, 0, 0.25);
     font-size: 25px;
   }
-  .brand span { color: var(--accent); }
+  .brand-white { color: var(--text); }
+  .brand-accent { color: var(--accent); }
 
   .top-actions {
     display: flex;
@@ -100,7 +101,6 @@
     line-height: 0.95;
     letter-spacing: -0.06em;
   }
-  .hero h1 span { color: var(--accent); }
   .hero p {
     max-width: 760px;
     margin: 18px auto 0;
@@ -129,8 +129,9 @@
   .online-line {
     margin-top: 18px;
     display: flex;
+    flex-wrap: wrap;
     justify-content: center;
-    gap: 18px;
+    gap: 12px;
     color: var(--muted);
     font-size: 14px;
   }
@@ -168,10 +169,7 @@
   .muted { color: var(--muted); }
   .small { font-size: 12px; color: var(--muted); line-height: 1.45; }
 
-  .status-list {
-    display: grid;
-    gap: 12px;
-  }
+  .status-list { display: grid; gap: 12px; }
   .status-item {
     display: grid;
     grid-template-columns: 24px 1fr;
@@ -194,6 +192,8 @@
   .lobby-head h2 { margin: 0; font-size: 22px; letter-spacing: -0.03em; }
   .connection-state { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
   .connection-state::before { content: ''; width: 8px; height: 8px; background: var(--accent-2); border-radius: 50%; box-shadow: 0 0 12px var(--accent-2); }
+  .connection-state.offline::before { background: var(--faint); box-shadow: none; }
+  .connection-state.error::before { background: var(--danger); box-shadow: 0 0 12px rgba(224,90,78,0.7); }
 
   .lobby-layout {
     display: grid;
@@ -201,11 +201,7 @@
     gap: 24px;
   }
 
-  .room-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-  }
+  .room-table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .room-table th {
     color: #b7bbc5;
     font-size: 12px;
@@ -214,10 +210,7 @@
     padding: 0 8px 10px;
     border-bottom: 1px solid var(--line);
   }
-  .room-table td {
-    padding: 14px 8px;
-    border-bottom: 1px solid rgba(255,255,255,0.055);
-  }
+  .room-table td { padding: 14px 8px; border-bottom: 1px solid rgba(255,255,255,0.055); }
   .room-code { font-weight: 900; letter-spacing: 0.04em; }
   .tag {
     display: inline-flex;
@@ -229,30 +222,44 @@
     background: rgba(255,255,255,0.035);
     font-size: 12px;
   }
-  .join-btn {
+
+  .join-btn, .secondary-btn, .danger-btn {
     border: 0;
     color: white;
-    background: linear-gradient(180deg, #d66b00, #bd5700);
     border-radius: 6px;
     font-weight: 800;
     padding: 8px 13px;
   }
+  .join-btn { background: linear-gradient(180deg, #d66b00, #bd5700); }
+  .secondary-btn { background: #40424c; }
+  .danger-btn { background: linear-gradient(180deg, #e05a4e, #b93d33); }
 
-  .empty-lobby {
+  .empty-lobby, .waiting-card {
     border: 1px dashed var(--line);
     border-radius: 12px;
     padding: 36px 20px;
     color: var(--muted);
     text-align: center;
   }
-  .empty-lobby strong { display: block; color: var(--text); margin-bottom: 6px; }
-
-  .join-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 22px;
+  .empty-lobby strong, .waiting-card strong { display: block; color: var(--text); margin-bottom: 6px; }
+  .waiting-card {
+    border-style: solid;
+    border-color: rgba(245,164,0,0.28);
+    background: rgba(245,164,0,0.06);
+    margin-bottom: 20px;
   }
-  .join-row input, .form-card input, .form-card select {
+  .waiting-code {
+    margin: 14px auto;
+    width: fit-content;
+    font-size: 30px;
+    font-weight: 950;
+    letter-spacing: 0.13em;
+    color: var(--accent);
+  }
+  .waiting-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+
+  .join-row { display: flex; gap: 8px; margin-top: 22px; }
+  .join-row input, .form-card input {
     min-width: 0;
     width: 100%;
     color: var(--text);
@@ -262,7 +269,7 @@
     padding: 12px 13px;
     outline: none;
   }
-  .join-row input:focus, .form-card input:focus, .form-card select:focus { border-color: rgba(245,164,0,0.7); }
+  .join-row input:focus, .form-card input:focus { border-color: rgba(245,164,0,0.7); }
 
   .form-card {
     background: rgba(255,255,255,0.025);
@@ -379,7 +386,7 @@
 <body>
   <main class="page">
     <nav class="topbar">
-      <div class="brand"><div class="brand-mark">♞</div>Ches<span>stein</span></div>
+      <div class="brand"><div class="brand-mark">♞</div><span class="brand-white">Ches</span><span class="brand-accent">stein</span></div>
       <div class="top-actions">
         <a class="pill" href="gui/?mode=bridge"><strong>Open GUI</strong></a>
         <span class="pill">Prototype</span>
@@ -387,12 +394,12 @@
     </nav>
 
     <section class="hero">
-      <h1>Play <span>Chesstein</span></h1>
-      <p>Smart chessboard web interface for local play, Stockfish games, and future online rooms between physical boards and browser players.</p>
+      <h1><span class="brand-white">Ches</span><span class="brand-accent">stein</span></h1>
+      <p>Smart chessboard web interface for local play, Stockfish games, and online rooms between physical boards and browser players.</p>
       <button class="hero-cta" onclick="createRoom()">
-        ▶ <span>Create Room<small>public or private</small></span>
+        ▶ <span>Create Room<small>wait here until someone joins</small></span>
       </button>
-      <div class="online-line"><span><span class="online-dot">●</span> static GitHub Pages build</span><span>·</span><span>local bridge ready</span></div>
+      <div class="online-line"><span><span class="online-dot">●</span> GitHub Pages frontend</span><span>·</span><span>Cloudflare room backend ready</span><span>·</span><span>local bridge supported</span></div>
     </section>
 
     <section class="grid">
@@ -401,7 +408,7 @@
         <div class="status-list">
           <div class="status-item"><div>♟</div><div><strong>Physical board</strong><span>STM32 firmware is the authority for real board moves.</span></div></div>
           <div class="status-item"><div>⚡</div><div><strong>Local bridge</strong><span>Python bridge connects browser, Stockfish, and USB serial.</span></div></div>
-          <div class="status-item"><div>🌐</div><div><strong>Online rooms</strong><span>UI is ready; real shared rooms need the multiplayer server pass.</span></div></div>
+          <div class="status-item"><div>🌐</div><div><strong>Online rooms</strong><span>Rooms start only after a second player joins.</span></div></div>
         </div>
       </aside>
 
@@ -409,14 +416,16 @@
         <div class="lobby-head">
           <div>
             <h2>Live Lobby</h2>
-            <div class="small">Public rooms are currently a frontend prototype on GitHub Pages.</div>
+            <div class="small">Create a public room for anyone to join, or a private room for a room-code game.</div>
           </div>
-          <div class="connection-state">Site online</div>
+          <div class="connection-state offline" id="server-state">Server not configured</div>
         </div>
+
+        <div id="waiting-panel"></div>
 
         <div class="lobby-layout">
           <div>
-            <div class="panel-title">Open rooms <span id="room-count">0</span></div>
+            <div class="panel-title">Open public rooms <span id="room-count">0</span></div>
             <div id="room-list"></div>
             <div class="join-row">
               <input id="room-code" placeholder="🔗 Enter room code" maxlength="8" onkeydown="if(event.key === 'Enter') joinRoomCode()" />
@@ -425,7 +434,7 @@
           </div>
 
           <div class="form-card">
-            <h3>Create new game</h3>
+            <h3>Create new room</h3>
             <div class="field">
               <label>Room visibility</label>
               <div class="segmented">
@@ -434,16 +443,12 @@
               </div>
             </div>
             <div class="field">
-              <label>Play as</label>
-              <select id="play-as">
-                <option value="random">Random</option>
-                <option value="white">White</option>
-                <option value="black">Black</option>
-              </select>
+              <label>Your name</label>
+              <input id="player-name" placeholder="Player" maxlength="24" />
             </div>
             <div class="field">
-              <label>Bridge URL</label>
-              <input id="bridge-url" value="ws://localhost:8765" />
+              <label>Room server URL</label>
+              <input id="server-url" placeholder="https://your-worker.workers.dev" />
             </div>
             <button class="create-btn" onclick="createRoom()">＋ Create Room</button>
           </div>
@@ -478,8 +483,11 @@
   <div class="toast" id="toast"></div>
 
 <script>
-const PUBLIC_ROOMS_KEY = 'chessteinPublicRooms';
+const PUBLIC_ROOMS_KEY = 'chessteinPublicRoomsPreview';
+const WAITING_ROOM_KEY = 'chessteinWaitingRoom';
 let visibility = 'public';
+let waitSocket = null;
+let waitingRoom = null;
 
 function generateRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -488,13 +496,33 @@ function generateRoomCode() {
   return out;
 }
 
-function readRooms() {
+function getServerUrl() {
+  const input = document.getElementById('server-url');
+  const value = (input.value || '').trim().replace(/\/+$/, '');
+  localStorage.setItem('chessteinServerUrl', value);
+  return value;
+}
+
+function getPlayerName() {
+  const input = document.getElementById('player-name');
+  const value = (input.value || 'Player').trim().slice(0, 24) || 'Player';
+  localStorage.setItem('chessteinPlayerName', value);
+  return value;
+}
+
+function readPreviewRooms() {
   try { return JSON.parse(localStorage.getItem(PUBLIC_ROOMS_KEY) || '[]'); }
   catch { return []; }
 }
 
-function writeRooms(rooms) {
+function writePreviewRooms(rooms) {
   localStorage.setItem(PUBLIC_ROOMS_KEY, JSON.stringify(rooms.slice(0, 8)));
+}
+
+function setServerState(kind, text) {
+  const el = document.getElementById('server-state');
+  el.className = `connection-state ${kind || ''}`.trim();
+  el.textContent = text;
 }
 
 function setVisibility(next) {
@@ -503,63 +531,255 @@ function setVisibility(next) {
   document.getElementById('visibility-private').classList.toggle('active', next === 'private');
 }
 
-function getBridgeUrl() {
-  const input = document.getElementById('bridge-url');
-  const value = (input.value || 'ws://localhost:8765').trim();
-  localStorage.setItem('chessteinBridgeUrl', value);
-  return value;
-}
-
 function guiUrl(params) {
   const query = new URLSearchParams(params);
   return `gui/?${query.toString()}`;
 }
 
-function createRoom() {
-  const code = generateRoomCode();
-  const side = document.getElementById('play-as')?.value || 'random';
-  const bridge = getBridgeUrl();
-
-  if (visibility === 'public') {
-    const rooms = readRooms().filter(room => room.code !== code);
-    rooms.unshift({ code, player: 'you', side, mode: 'casual', visibility, createdAt: Date.now() });
-    writeRooms(rooms);
-  }
-
-  window.location.href = guiUrl({ mode: 'room', visibility, room: code, side, bridge });
+function roomWsUrl(base, roomCode, token, name) {
+  const http = new URL(base);
+  http.protocol = http.protocol === 'https:' ? 'wss:' : 'ws:';
+  http.pathname = `/ws/rooms/${encodeURIComponent(roomCode)}`;
+  http.search = '';
+  http.searchParams.set('token', token);
+  http.searchParams.set('name', name);
+  http.searchParams.set('client', 'gui');
+  return http.toString();
 }
 
-function joinRoom(code) {
-  const bridge = getBridgeUrl();
-  window.location.href = guiUrl({ mode: 'room', visibility: 'public', room: code, bridge });
+async function createRoom() {
+  const server = getServerUrl();
+  const name = getPlayerName();
+
+  if (!server) {
+    createPreviewRoom(name);
+    return;
+  }
+
+  try {
+    setServerState('', 'Creating room…');
+    const response = await fetch(`${server}/api/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visibility, name, clientType: 'gui' })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'room_create_failed');
+
+    waitingRoom = {
+      roomCode: data.room.roomCode,
+      visibility: data.room.visibility,
+      playerToken: data.playerToken,
+      color: data.color || 'white',
+      server,
+      wsUrl: roomWsUrl(server, data.room.roomCode, data.playerToken, name),
+      name
+    };
+    localStorage.setItem(WAITING_ROOM_KEY, JSON.stringify(waitingRoom));
+    renderWaitingRoom();
+    connectWaitingSocket();
+    await refreshRooms();
+    setServerState('', 'Room server connected');
+  } catch (error) {
+    setServerState('error', 'Room server error');
+    showToast(`Could not create room: ${error.message}`);
+  }
+}
+
+function createPreviewRoom(name) {
+  const code = generateRoomCode();
+  if (visibility === 'public') {
+    const rooms = readPreviewRooms().filter(room => room.code !== code);
+    rooms.unshift({ code, player: name, visibility, createdAt: Date.now() });
+    writePreviewRooms(rooms);
+  }
+  waitingRoom = { roomCode: code, visibility, playerToken: 'preview', color: 'white', server: '', wsUrl: '', name };
+  localStorage.setItem(WAITING_ROOM_KEY, JSON.stringify(waitingRoom));
+  renderWaitingRoom();
+  renderRooms();
+  showToast('Preview room created. Set a room server URL for real multiplayer.');
+}
+
+function connectWaitingSocket() {
+  if (!waitingRoom?.wsUrl) return;
+  if (waitSocket) waitSocket.close();
+
+  try {
+    waitSocket = new WebSocket(waitingRoom.wsUrl);
+  } catch {
+    showToast('Invalid room WebSocket URL.');
+    return;
+  }
+
+  waitSocket.onopen = () => setServerState('', 'Waiting for opponent');
+  waitSocket.onerror = () => setServerState('error', 'Room socket error');
+  waitSocket.onclose = () => {
+    if (waitingRoom) setServerState('offline', 'Room socket closed');
+  };
+  waitSocket.onmessage = (event) => {
+    let msg = null;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg.type === 'game_started') {
+      const room = msg.room || {};
+      const color = msg.playerColor || waitingRoom.color || 'white';
+      const wsUrl = roomWsUrl(waitingRoom.server, room.roomCode || waitingRoom.roomCode, waitingRoom.playerToken, waitingRoom.name);
+      localStorage.removeItem(WAITING_ROOM_KEY);
+      window.location.href = guiUrl({ mode: 'online', room: room.roomCode || waitingRoom.roomCode, color, token: waitingRoom.playerToken, ws: wsUrl });
+    } else if (msg.type === 'cancelled' || msg.type === 'room_closed') {
+      clearWaitingRoom();
+      showToast('Room closed.');
+    }
+  };
+}
+
+async function cancelWaitingRoom() {
+  if (!waitingRoom) return;
+  const room = waitingRoom;
+  clearWaitingRoom(false);
+
+  if (room.server && room.playerToken) {
+    try {
+      await fetch(`${room.server}/api/rooms/${encodeURIComponent(room.roomCode)}?token=${encodeURIComponent(room.playerToken)}`, { method: 'DELETE' });
+    } catch {}
+  } else {
+    writePreviewRooms(readPreviewRooms().filter(item => item.code !== room.roomCode));
+  }
+
+  clearWaitingRoom();
+  await refreshRooms();
+  showToast('Room cancelled.');
+}
+
+function clearWaitingRoom(render = true) {
+  if (waitSocket) {
+    try { waitSocket.close(); } catch {}
+    waitSocket = null;
+  }
+  waitingRoom = null;
+  localStorage.removeItem(WAITING_ROOM_KEY);
+  if (render) renderWaitingRoom();
+}
+
+function copyInviteLink() {
+  if (!waitingRoom) return;
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('join', waitingRoom.roomCode);
+  navigator.clipboard?.writeText(url.toString());
+  showToast('Invite link copied.');
+}
+
+function renderWaitingRoom() {
+  const panel = document.getElementById('waiting-panel');
+  if (!waitingRoom) {
+    panel.innerHTML = '';
+    return;
+  }
+
+  const visibilityLabel = waitingRoom.visibility === 'public' ? 'Public room' : 'Private room';
+  panel.innerHTML = `<div class="waiting-card">
+    <strong>${visibilityLabel} created</strong>
+    <div>Waiting for an opponent. You are White.</div>
+    <div class="waiting-code">${escapeHtml(waitingRoom.roomCode)}</div>
+    <div class="small">The game starts automatically when a second player joins.</div>
+    <div class="waiting-actions">
+      <button class="secondary-btn" onclick="copyInviteLink()">Copy Invite Link</button>
+      <button class="danger-btn" onclick="cancelWaitingRoom()">Cancel Room</button>
+    </div>
+  </div>`;
+}
+
+async function joinRoom(code) {
+  const server = getServerUrl();
+  const name = getPlayerName();
+  const cleanCode = String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleanCode) return showToast('Enter a room code first.');
+
+  if (!server) {
+    showToast('Set a room server URL before joining real rooms.');
+    return;
+  }
+
+  try {
+    const token = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const wsUrl = roomWsUrl(server, cleanCode, token, name);
+    const socket = new WebSocket(wsUrl);
+    setServerState('', 'Joining room…');
+
+    socket.onmessage = (event) => {
+      let msg = null;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === 'game_started') {
+        const color = msg.playerColor || 'black';
+        socket.close();
+        window.location.href = guiUrl({ mode: 'online', room: cleanCode, color, token, ws: wsUrl });
+      } else if (msg.type === 'error') {
+        showToast(msg.message || 'Could not join room.');
+        socket.close();
+      }
+    };
+    socket.onerror = () => {
+      setServerState('error', 'Join failed');
+      showToast('Could not connect to the room.');
+    };
+  } catch (error) {
+    showToast(`Could not join: ${error.message}`);
+  }
 }
 
 function joinRoomCode() {
   const input = document.getElementById('room-code');
-  const code = (input.value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!code) return showToast('Enter a room code first.');
-  window.location.href = guiUrl({ mode: 'room', visibility: 'private', room: code, bridge: getBridgeUrl() });
+  joinRoom(input.value);
 }
 
-function renderRooms() {
-  const rooms = readRooms();
+async function refreshRooms() {
+  const server = getServerUrl();
+  if (!server) {
+    setServerState('offline', 'Server not configured');
+    renderRooms(readPreviewRooms().map(room => ({
+      roomCode: room.code,
+      player: room.player,
+      visibility: room.visibility,
+      status: 'waiting'
+    })));
+    return;
+  }
+
+  try {
+    const response = await fetch(`${server}/api/rooms`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'room_list_failed');
+    setServerState('', 'Room server connected');
+    renderRooms(data.rooms || []);
+  } catch (error) {
+    setServerState('error', 'Room server error');
+    renderRooms([]);
+  }
+}
+
+function renderRooms(rooms = []) {
   const list = document.getElementById('room-list');
   const count = document.getElementById('room-count');
-  count.textContent = `(${rooms.length})`;
+  const waitingRooms = rooms.filter(room => (room.status || 'waiting') === 'waiting');
+  count.textContent = `(${waitingRooms.length})`;
 
-  if (!rooms.length) {
-    list.innerHTML = `<div class="empty-lobby"><strong>No public rooms yet</strong>Create a public room to preview the lobby flow.</div>`;
+  if (!waitingRooms.length) {
+    list.innerHTML = `<div class="empty-lobby"><strong>No public rooms waiting</strong>Create a public room or join a private room by code.</div>`;
     return;
   }
 
   list.innerHTML = `<table class="room-table">
-    <thead><tr><th>Room</th><th>Player</th><th>Mode</th><th></th></tr></thead>
-    <tbody>${rooms.map(room => `<tr>
-      <td><span class="room-code">${escapeHtml(room.code)}</span></td>
-      <td>${escapeHtml(room.player || 'anon')}</td>
-      <td><span class="tag">${escapeHtml(room.mode || 'casual')}</span></td>
-      <td><button class="join-btn" onclick="joinRoom('${escapeHtml(room.code)}')">Join</button></td>
-    </tr>`).join('')}</tbody>
+    <thead><tr><th>Room</th><th>Host</th><th>Status</th><th></th></tr></thead>
+    <tbody>${waitingRooms.map(room => {
+      const host = room.players?.white?.name || room.player || 'Player';
+      const code = room.roomCode || room.code;
+      return `<tr>
+        <td><span class="room-code">${escapeHtml(code)}</span></td>
+        <td>${escapeHtml(host)}</td>
+        <td><span class="tag">waiting</span></td>
+        <td><button class="join-btn" onclick="joinRoom('${escapeHtml(code)}')">Join</button></td>
+      </tr>`;
+    }).join('')}</tbody>
   </table>`;
 }
 
@@ -568,17 +788,30 @@ function showToast(text) {
   el.textContent = text;
   el.classList.add('show');
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => el.classList.remove('show'), 2200);
+  showToast.timer = setTimeout(() => el.classList.remove('show'), 2400);
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>'"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[ch]));
+  return String(value || '').replace(/[&<>'"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[ch]));
 }
 
 (function init() {
-  const savedBridge = localStorage.getItem('chessteinBridgeUrl');
-  if (savedBridge) document.getElementById('bridge-url').value = savedBridge;
-  renderRooms();
+  const savedServer = localStorage.getItem('chessteinServerUrl');
+  if (savedServer) document.getElementById('server-url').value = savedServer;
+  const savedName = localStorage.getItem('chessteinPlayerName');
+  if (savedName) document.getElementById('player-name').value = savedName;
+
+  const params = new URLSearchParams(window.location.search);
+  const joinCode = (params.get('join') || '').trim().toUpperCase();
+  if (joinCode) document.getElementById('room-code').value = joinCode;
+
+  try {
+    waitingRoom = JSON.parse(localStorage.getItem(WAITING_ROOM_KEY) || 'null');
+  } catch { waitingRoom = null; }
+  renderWaitingRoom();
+  if (waitingRoom?.wsUrl) connectWaitingSocket();
+  refreshRooms();
+  setInterval(refreshRooms, 10000);
 })();
 </script>
 </body>

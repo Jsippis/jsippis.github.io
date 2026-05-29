@@ -1,20 +1,18 @@
 const START_FEN = 'startpos';
 const MAX_PUBLIC_ROOMS = 50;
+const EMPTY_ROOM_TTL_MS = 30_000;
 
 function nowIso() {
   return new Date().toISOString();
 }
 
 function safeJsonParse(value) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(value); }
+  catch { return null; }
 }
 
 function normalizeRoomCode(value) {
-  return String(value || '').trim().toUpperCase();
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function sanitizeClientType(value) {
@@ -23,10 +21,12 @@ function sanitizeClientType(value) {
   return 'gui';
 }
 
-function sanitizeRequestedColor(value) {
-  const text = String(value || '').toLowerCase();
-  if (['white', 'black', 'spectator'].includes(text)) return text;
-  return '';
+function sanitizeVisibility(value) {
+  return String(value || '').toLowerCase() === 'public' ? 'public' : 'private';
+}
+
+function sanitizeName(value) {
+  return String(value || 'Player').trim().slice(0, 32) || 'Player';
 }
 
 function initialSnapshot(roomCode) {
@@ -34,17 +34,28 @@ function initialSnapshot(roomCode) {
   return {
     roomCode,
     visibility: 'private',
-    mode: 'multiplayer',
     status: 'waiting',
     createdAt: time,
     updatedAt: time,
+    startedAt: null,
+    endedAt: null,
     fen: START_FEN,
     history: [],
-    players: {
-      white: null,
-      black: null,
-    },
+    players: { white: null, black: null },
     spectators: 0,
+    result: null,
+    endReason: null,
+    drawOfferBy: null,
+  };
+}
+
+function publicPlayer(player) {
+  if (!player) return null;
+  return {
+    name: player.name,
+    clientType: player.clientType,
+    connected: !!player.connected,
+    joinedAt: player.joinedAt,
   };
 }
 
@@ -52,16 +63,30 @@ function publicRoomSummary(snapshot) {
   return {
     roomCode: snapshot.roomCode,
     visibility: snapshot.visibility,
-    mode: snapshot.mode,
     status: snapshot.status,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
+    startedAt: snapshot.startedAt || null,
     players: {
-      white: snapshot.players?.white ? { name: snapshot.players.white.name, clientType: snapshot.players.white.clientType } : null,
-      black: snapshot.players?.black ? { name: snapshot.players.black.name, clientType: snapshot.players.black.clientType } : null,
+      white: publicPlayer(snapshot.players?.white),
+      black: publicPlayer(snapshot.players?.black),
     },
     spectators: snapshot.spectators || 0,
   };
+}
+
+function publicSnapshot(snapshot) {
+  return {
+    ...snapshot,
+    players: {
+      white: publicPlayer(snapshot.players?.white),
+      black: publicPlayer(snapshot.players?.black),
+    },
+  };
+}
+
+function playerMatches(player, token) {
+  return !!player && !!token && player.token === token;
 }
 
 export class Lobby {
@@ -77,25 +102,22 @@ export class Lobby {
     if (request.method === 'GET' && url.pathname === '/list') {
       const rooms = await this.storage.get('publicRooms') || [];
       const visibleRooms = rooms
-        .filter((room) => room.visibility === 'public')
+        .filter((room) => room.visibility === 'public' && room.status === 'waiting')
         .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
         .slice(0, MAX_PUBLIC_ROOMS);
       return Response.json({ ok: true, rooms: visibleRooms });
     }
 
-    if (request.method === 'POST' && url.pathname === '/rooms') {
+    if ((request.method === 'POST' || request.method === 'PATCH') && url.pathname === '/rooms') {
       const payload = await request.json();
       const existing = await this.storage.get('publicRooms') || [];
-      const summary = publicRoomSummary(payload);
-      const rooms = [summary, ...existing.filter((room) => room.roomCode !== summary.roomCode)]
-        .slice(0, MAX_PUBLIC_ROOMS);
-      await this.storage.put('publicRooms', rooms);
-      return Response.json({ ok: true, room: summary });
-    }
 
-    if (request.method === 'PATCH' && url.pathname === '/rooms') {
-      const payload = await request.json();
-      const existing = await this.storage.get('publicRooms') || [];
+      if (payload.visibility !== 'public' || payload.status !== 'waiting') {
+        const rooms = existing.filter((room) => room.roomCode !== payload.roomCode);
+        await this.storage.put('publicRooms', rooms);
+        return Response.json({ ok: true, removed: true });
+      }
+
       const summary = publicRoomSummary(payload);
       const rooms = [summary, ...existing.filter((room) => room.roomCode !== summary.roomCode)]
         .slice(0, MAX_PUBLIC_ROOMS);
@@ -124,6 +146,20 @@ export class GameRoom {
     this.snapshot = null;
   }
 
+  async alarm() {
+    await this.loadSnapshot();
+    if (this.sessions.size > 0) return;
+
+    if (this.snapshot.status === 'waiting' || this.snapshot.status === 'active') {
+      this.snapshot.status = 'abandoned';
+      this.snapshot.updatedAt = nowIso();
+      this.snapshot.players.white = null;
+      this.snapshot.players.black = null;
+      await this.storage.put('snapshot', this.snapshot);
+      await this.removeFromLobby();
+    }
+  }
+
   async loadSnapshot(roomCode = 'UNKNOWN') {
     if (!this.snapshot) {
       this.snapshot = await this.storage.get('snapshot') || initialSnapshot(roomCode);
@@ -141,14 +177,25 @@ export class GameRoom {
   }
 
   async updateLobby() {
-    if (!this.snapshot || this.snapshot.visibility !== 'public' || !this.env.LOBBY) return;
+    if (!this.env.LOBBY || !this.snapshot) return;
     const id = this.env.LOBBY.idFromName('global');
     const lobby = this.env.LOBBY.get(id);
-    await lobby.fetch(new Request('https://lobby/rooms', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(this.snapshot),
-    }));
+    if (this.snapshot.visibility === 'public' && this.snapshot.status === 'waiting') {
+      await lobby.fetch(new Request('https://lobby/rooms', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(this.snapshot),
+      }));
+    } else {
+      await lobby.fetch(new Request(`https://lobby/rooms/${this.snapshot.roomCode}`, { method: 'DELETE' }));
+    }
+  }
+
+  async removeFromLobby() {
+    if (!this.env.LOBBY || !this.snapshot) return;
+    const id = this.env.LOBBY.idFromName('global');
+    const lobby = this.env.LOBBY.get(id);
+    await lobby.fetch(new Request(`https://lobby/rooms/${this.snapshot.roomCode}`, { method: 'DELETE' }));
   }
 
   async fetch(request) {
@@ -158,25 +205,44 @@ export class GameRoom {
       const payload = await request.json();
       const existing = await this.storage.get('snapshot');
       if (!existing) {
+        const token = String(payload.playerToken || crypto.randomUUID());
+        const roomCode = normalizeRoomCode(payload.roomCode);
         this.snapshot = {
-          ...initialSnapshot(payload.roomCode),
-          ...payload,
-          createdAt: nowIso(),
-          updatedAt: nowIso(),
-          players: { white: null, black: null },
-          spectators: 0,
+          ...initialSnapshot(roomCode),
+          roomCode,
+          visibility: sanitizeVisibility(payload.visibility),
+          players: {
+            white: {
+              token,
+              name: sanitizeName(payload.name),
+              clientType: sanitizeClientType(payload.clientType),
+              connected: false,
+              joinedAt: nowIso(),
+            },
+            black: null,
+          },
         };
         await this.saveSnapshot();
       } else {
         this.snapshot = existing;
       }
-      return Response.json({ ok: true, room: publicRoomSummary(this.snapshot) });
+      return Response.json({ ok: true, room: publicSnapshot(this.snapshot) });
     }
 
     if (request.method === 'GET' && url.pathname === '/snapshot') {
       const roomCode = normalizeRoomCode(url.searchParams.get('roomCode')) || 'UNKNOWN';
       const snapshot = await this.loadSnapshot(roomCode);
-      return Response.json({ ok: true, room: snapshot });
+      return Response.json({ ok: true, room: publicSnapshot(snapshot) });
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/cancel') {
+      const token = String(url.searchParams.get('token') || '');
+      await this.loadSnapshot(normalizeRoomCode(url.searchParams.get('roomCode')) || 'UNKNOWN');
+      if (!playerMatches(this.snapshot.players.white, token)) {
+        return Response.json({ ok: false, error: 'not_room_creator' }, { status: 403 });
+      }
+      await this.cancelRoom('cancelled');
+      return Response.json({ ok: true });
     }
 
     if (request.headers.get('Upgrade') === 'websocket') {
@@ -191,13 +257,18 @@ export class GameRoom {
     const roomCode = normalizeRoomCode(url.pathname.split('/').pop());
     await this.loadSnapshot(roomCode);
 
+    if (['cancelled', 'abandoned', 'finished'].includes(this.snapshot.status)) {
+      return new Response('Room is closed.', { status: 409 });
+    }
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-
     const session = this.createSession(url);
+
     server.accept();
     this.sessions.set(server, session);
 
+    const previousStatus = this.snapshot.status;
     this.assignSeat(session);
     await this.saveSnapshot();
 
@@ -207,68 +278,70 @@ export class GameRoom {
       });
     });
 
-    server.addEventListener('close', () => {
-      this.closeSession(server).catch(() => {});
-    });
-
-    server.addEventListener('error', () => {
-      this.closeSession(server).catch(() => {});
-    });
+    server.addEventListener('close', () => this.closeSession(server).catch(() => {}));
+    server.addEventListener('error', () => this.closeSession(server).catch(() => {}));
 
     this.send(server, {
       type: 'welcome',
-      session,
-      room: this.snapshot,
+      session: this.publicSession(session),
+      playerColor: session.color,
+      room: publicSnapshot(this.snapshot),
       serverTime: nowIso(),
     });
 
-    this.broadcast({
-      type: 'presence',
-      room: publicRoomSummary(this.snapshot),
-      sessions: this.publicSessions(),
-    });
+    if (previousStatus !== 'active' && this.snapshot.status === 'active') {
+      await this.broadcastGameStarted();
+    } else {
+      this.broadcastPresence();
+    }
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
   createSession(url) {
-    const id = crypto.randomUUID();
-    const requestedColor = sanitizeRequestedColor(url.searchParams.get('color'));
+    const token = String(url.searchParams.get('token') || crypto.randomUUID());
     const clientType = sanitizeClientType(url.searchParams.get('client'));
-    const name = String(url.searchParams.get('name') || 'anon').slice(0, 32);
+    const name = sanitizeName(url.searchParams.get('name'));
 
     return {
-      id,
+      id: crypto.randomUUID(),
+      token,
       name,
       clientType,
-      requestedColor,
       color: 'spectator',
       joinedAt: nowIso(),
     };
   }
 
   assignSeat(session) {
-    if (session.requestedColor === 'spectator') {
-      session.color = 'spectator';
+    if (playerMatches(this.snapshot.players.white, session.token)) {
+      session.color = 'white';
+      this.snapshot.players.white.connected = true;
+      this.snapshot.players.white.name = session.name;
+      this.snapshot.players.white.clientType = session.clientType;
       return;
     }
 
-    const desired = session.requestedColor;
-    const fallback = desired === 'black' ? 'white' : 'black';
-    const candidates = desired ? [desired, fallback] : ['white', 'black'];
+    if (playerMatches(this.snapshot.players.black, session.token)) {
+      session.color = 'black';
+      this.snapshot.players.black.connected = true;
+      this.snapshot.players.black.name = session.name;
+      this.snapshot.players.black.clientType = session.clientType;
+      return;
+    }
 
-    for (const color of candidates) {
-      if (!this.snapshot.players[color]) {
-        session.color = color;
-        this.snapshot.players[color] = {
-          id: session.id,
-          name: session.name,
-          clientType: session.clientType,
-          joinedAt: session.joinedAt,
-        };
-        this.snapshot.status = this.snapshot.players.white && this.snapshot.players.black ? 'active' : 'waiting';
-        return;
-      }
+    if (this.snapshot.status === 'waiting' && !this.snapshot.players.black) {
+      session.color = 'black';
+      this.snapshot.players.black = {
+        token: session.token,
+        name: session.name,
+        clientType: session.clientType,
+        connected: true,
+        joinedAt: session.joinedAt,
+      };
+      this.snapshot.status = 'active';
+      this.snapshot.startedAt = nowIso();
+      return;
     }
 
     session.color = 'spectator';
@@ -277,23 +350,24 @@ export class GameRoom {
   async closeSession(socket) {
     const session = this.sessions.get(socket);
     if (!session) return;
-
     this.sessions.delete(socket);
 
-    if (session.color === 'white' || session.color === 'black') {
+    const stillConnected = Array.from(this.sessions.values())
+      .some((other) => other.token === session.token);
+
+    if (!stillConnected && (session.color === 'white' || session.color === 'black')) {
       const player = this.snapshot?.players?.[session.color];
-      if (player?.id === session.id) {
-        this.snapshot.players[session.color] = null;
-        this.snapshot.status = 'waiting';
+      if (playerMatches(player, session.token)) {
+        player.connected = false;
       }
     }
 
     await this.saveSnapshot();
-    this.broadcast({
-      type: 'presence',
-      room: publicRoomSummary(this.snapshot),
-      sessions: this.publicSessions(),
-    });
+    this.broadcastPresence();
+
+    if (this.sessions.size === 0) {
+      await this.storage.setAlarm(Date.now() + EMPTY_ROOM_TTL_MS);
+    }
   }
 
   async handleMessage(socket, rawData) {
@@ -312,7 +386,7 @@ export class GameRoom {
         break;
 
       case 'request_sync':
-        this.send(socket, { type: 'sync', room: this.snapshot, sessions: this.publicSessions() });
+        this.send(socket, { type: 'sync', room: publicSnapshot(this.snapshot), sessions: this.publicSessions() });
         break;
 
       case 'move':
@@ -321,9 +395,12 @@ export class GameRoom {
         await this.applyBoardUpdate(session, message);
         break;
 
-      case 'reset':
-      case 'new_game':
-        await this.resetGame(session, message);
+      case 'cancel_room':
+        if (!playerMatches(this.snapshot.players.white, session.token)) {
+          this.send(socket, { type: 'error', message: 'Only the room creator can cancel this room.' });
+          return;
+        }
+        await this.cancelRoom('cancelled');
         break;
 
       case 'chat':
@@ -341,6 +418,16 @@ export class GameRoom {
   }
 
   async applyBoardUpdate(session, message) {
+    if (this.snapshot.status !== 'active') {
+      this.sendToToken(session.token, { type: 'error', message: 'Game has not started yet.' });
+      return;
+    }
+
+    if (session.color !== 'white' && session.color !== 'black') {
+      this.sendToToken(session.token, { type: 'error', message: 'Spectators cannot move.' });
+      return;
+    }
+
     if (typeof message.fen === 'string' && message.fen.trim()) {
       this.snapshot.fen = message.fen.trim();
     }
@@ -350,40 +437,50 @@ export class GameRoom {
     } else if (message.san || message.uci) {
       this.snapshot.history = [
         ...(this.snapshot.history || []),
-        {
-          san: message.san || null,
-          uci: message.uci || null,
-          by: session.color,
-          at: nowIso(),
-        },
+        { san: message.san || message.uci || null, uci: message.uci || null, by: session.color, at: nowIso() },
       ].slice(-300);
     }
 
-    this.snapshot.status = message.status || this.snapshot.status || 'active';
+    this.snapshot.drawOfferBy = null;
     await this.saveSnapshot();
 
     this.broadcast({
       type: 'room_update',
       reason: message.type,
       from: this.publicSession(session),
-      room: this.snapshot,
-      move: {
-        uci: message.uci || null,
-        san: message.san || null,
-      },
+      room: publicSnapshot(this.snapshot),
+      move: { uci: message.uci || null, san: message.san || null },
     });
   }
 
-  async resetGame(session, message) {
-    this.snapshot.fen = typeof message.fen === 'string' ? message.fen : START_FEN;
-    this.snapshot.history = [];
-    this.snapshot.status = this.snapshot.players.white && this.snapshot.players.black ? 'active' : 'waiting';
+  async cancelRoom(status = 'cancelled') {
+    this.snapshot.status = status;
+    this.snapshot.updatedAt = nowIso();
     await this.saveSnapshot();
+    await this.removeFromLobby();
+    this.broadcast({ type: 'cancelled', room: publicSnapshot(this.snapshot) });
+    for (const socket of this.sessions.keys()) {
+      try { socket.close(1000, 'room_cancelled'); } catch {}
+    }
+  }
 
+  async broadcastGameStarted() {
+    await this.removeFromLobby();
+    for (const [socket, session] of this.sessions.entries()) {
+      this.send(socket, {
+        type: 'game_started',
+        playerColor: session.color,
+        session: this.publicSession(session),
+        room: publicSnapshot(this.snapshot),
+      });
+    }
+  }
+
+  broadcastPresence() {
     this.broadcast({
-      type: 'game_reset',
-      from: this.publicSession(session),
-      room: this.snapshot,
+      type: 'presence',
+      room: publicRoomSummary(this.snapshot),
+      sessions: this.publicSessions(),
     });
   }
 
@@ -401,22 +498,22 @@ export class GameRoom {
     return Array.from(this.sessions.values()).map((session) => this.publicSession(session));
   }
 
-  send(socket, payload) {
-    try {
-      socket.send(JSON.stringify(payload));
-    } catch {
-      // Ignore dead sockets; close handler will clean up when the runtime reports it.
+  sendToToken(token, payload) {
+    for (const [socket, session] of this.sessions.entries()) {
+      if (session.token === token) this.send(socket, payload);
     }
+  }
+
+  send(socket, payload) {
+    try { socket.send(JSON.stringify(payload)); }
+    catch {}
   }
 
   broadcast(payload) {
     const data = JSON.stringify(payload);
     for (const socket of this.sessions.keys()) {
-      try {
-        socket.send(data);
-      } catch {
-        // Ignore dead sockets.
-      }
+      try { socket.send(data); }
+      catch {}
     }
   }
 }
