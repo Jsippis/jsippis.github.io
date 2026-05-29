@@ -49,6 +49,39 @@
     margin-bottom: 28px;
   }
 
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .home-link {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 10px;
+    transition: all 0.15s ease;
+  }
+
+  .home-link:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(201, 162, 39, 0.08);
+  }
+
+  .session-badge {
+    color: var(--accent);
+    border: 1px solid rgba(201, 162, 39, 0.35);
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    background: rgba(201, 162, 39, 0.08);
+  }
+
   .logo {
     font-family: 'Fraunces', serif;
     font-size: 28px;
@@ -355,12 +388,26 @@
     justify-content: center;
   }
   .promo-piece:hover { background: var(--border); }
+
+  .piece-unicode-fallback {
+    font-size: 44px;
+    line-height: 1;
+  }
+
+  @media (max-width: 760px) {
+    header { align-items: flex-start; gap: 12px; flex-direction: column; }
+    .header-left { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">Ches<span>stein</span></div>
+  <div class="header-left">
+    <a class="home-link" href="../">← lobby</a>
+    <div class="logo">Ches<span>stein</span></div>
+    <div class="session-badge" id="session-badge">bridge</div>
+  </div>
   <div id="ws-status">
     <div id="ws-dot"></div>
     <span id="ws-label">disconnected</span>
@@ -430,6 +477,10 @@ const PIECE_LABELS = {
   wK:'White king', wQ:'White queen', wR:'White rook', wB:'White bishop', wN:'White knight', wP:'White pawn',
   bK:'Black king', bQ:'Black queen', bR:'Black rook', bB:'Black bishop', bN:'Black knight', bP:'Black pawn'
 };
+const PIECE_UNICODE = {
+  wK:'♔', wQ:'♕', wR:'♖', wB:'♗', wN:'♘', wP:'♙',
+  bK:'♚', bQ:'♛', bR:'♜', bB:'♝', bN:'♞', bP:'♟'
+};
 
 function createPieceElement(piece, className = 'piece') {
   const wrap = document.createElement('div');
@@ -440,6 +491,10 @@ function createPieceElement(piece, className = 'piece') {
   img.src = PIECE_ASSET_BASE + PIECE_IMAGES[piece];
   img.alt = PIECE_LABELS[piece] || piece;
   img.draggable = false;
+  img.onerror = () => {
+    wrap.textContent = PIECE_UNICODE[piece] || '';
+    wrap.classList.add('piece-unicode-fallback');
+  };
 
   wrap.appendChild(img);
   return wrap;
@@ -465,6 +520,50 @@ let state = {
 
 let ws = null;
 let pendingPromotion = null;
+
+const query = new URLSearchParams(window.location.search);
+const launchMode = query.get('mode') || 'bridge';
+const launchRoom = (query.get('room') || '').trim().toUpperCase();
+const launchVisibility = query.get('visibility') || '';
+
+function describeLaunchMode() {
+  if (launchMode === 'ai') return 'vs ai';
+  if (launchMode === 'local') return 'local';
+  if (launchMode === 'room') return launchRoom ? `room ${launchRoom}` : 'room';
+  return 'bridge';
+}
+
+function getInitialStatusText() {
+  if (launchMode === 'ai') {
+    return 'VS AI mode. Connect the local bridge to use Stockfish as black.';
+  }
+  if (launchMode === 'local') {
+    return 'Local browser mode. Play both sides on this device.';
+  }
+  if (launchMode === 'room') {
+    const visibility = launchVisibility ? `${launchVisibility} ` : '';
+    const room = launchRoom ? ` ${launchRoom}` : '';
+    return `${visibility}room${room}. Online room sync is a placeholder until the multiplayer server is added.`;
+  }
+  return 'Connect to your Python bridge to start.';
+}
+
+function applyLaunchParams() {
+  const badge = document.getElementById('session-badge');
+  if (badge) badge.textContent = describeLaunchMode();
+
+  const urlInput = document.getElementById('ws-url');
+  const savedBridge = localStorage.getItem('chessteinBridgeUrl');
+  const requestedBridge = query.get('bridge');
+  const bridgeUrl = requestedBridge || savedBridge || urlInput.value || 'ws://localhost:8765';
+  urlInput.value = bridgeUrl;
+
+  setStatus(getInitialStatusText());
+
+  if (query.get('connect') === '1') {
+    connect(bridgeUrl);
+  }
+}
 
 function fenToBoard(fen) {
   const b = Array(64).fill(null);
@@ -863,7 +962,8 @@ function toggleConnect() {
     ws.close();
     return;
   }
-  const url = document.getElementById('ws-url').value;
+  const url = document.getElementById('ws-url').value.trim();
+  if (url) localStorage.setItem('chessteinBridgeUrl', url);
   connect(url);
 }
 
@@ -896,7 +996,7 @@ function connect(url) {
   ws.onclose = () => {
     setWsStatus('off', 'disconnected');
     document.getElementById('connect-btn').textContent = 'connect';
-    setStatus('Disconnected. Moves will be applied locally.');
+    setStatus(launchMode === 'local' ? 'Local browser mode. Play both sides on this device.' : 'Disconnected. Moves will be applied locally.');
   };
 
   ws.onerror = () => {
@@ -1119,7 +1219,7 @@ function applyFen(fen) {
 }
 
 buildBoard();
-setStatus('Connect to your Python bridge to start.');
+applyLaunchParams();
 </script>
 </body>
 </html>

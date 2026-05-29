@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chesstein</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #111113;
+    --panel: #17181c;
+    --panel-2: #1f2026;
+    --line: #2d3038;
+    --soft-line: rgba(255,255,255,0.08);
+    --text: #f4f4f5;
+    --muted: #a3a6af;
+    --faint: #6f737d;
+    --accent: #f5a400;
+    --accent-2: #18b95b;
+    --orange: #d96d00;
+    --orange-2: #f28a00;
+    --danger: #e05a4e;
+    --shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 50% -20%, rgba(245, 164, 0, 0.16), transparent 36rem),
+      radial-gradient(circle at 100% 20%, rgba(24, 185, 91, 0.08), transparent 28rem),
+      var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  a { color: inherit; }
+
+  .page {
+    width: min(1420px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 28px 0 48px;
+  }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 28px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    font-size: clamp(28px, 4vw, 48px);
+  }
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    color: #171100;
+    background: linear-gradient(135deg, var(--accent), #ffcf4b);
+    box-shadow: 0 10px 30px rgba(245, 164, 0, 0.25);
+    font-size: 25px;
+  }
+  .brand span { color: var(--accent); }
+
+  .top-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .pill {
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.03);
+    color: var(--muted);
+    padding: 9px 13px;
+    border-radius: 999px;
+    font-size: 13px;
+    text-decoration: none;
+  }
+  .pill strong { color: var(--text); font-weight: 700; }
+
+  .hero {
+    text-align: center;
+    margin: 12px auto 28px;
+    max-width: 820px;
+  }
+  .hero h1 {
+    margin: 0;
+    font-size: clamp(42px, 7vw, 82px);
+    line-height: 0.95;
+    letter-spacing: -0.06em;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero p {
+    max-width: 760px;
+    margin: 18px auto 0;
+    color: #dfe1e6;
+    font-size: clamp(15px, 1.8vw, 19px);
+    line-height: 1.55;
+  }
+
+  .hero-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 24px;
+    min-width: 270px;
+    border: 0;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #20bb5d, #14a24d);
+    color: white;
+    box-shadow: 0 14px 36px rgba(20, 162, 77, 0.25);
+    padding: 18px 28px;
+    font-size: 20px;
+    font-weight: 900;
+  }
+  .hero-cta small { display: block; font-weight: 500; opacity: 0.85; font-size: 13px; margin-top: 4px; }
+  .online-line {
+    margin-top: 18px;
+    display: flex;
+    justify-content: center;
+    gap: 18px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .online-dot { color: #20d466; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr) 250px;
+    gap: 24px;
+    align-items: start;
+    margin-top: 24px;
+  }
+
+  .panel {
+    background: rgba(23,24,28,0.92);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+  .side-panel { padding: 14px; }
+  .main-panel { padding: 28px; }
+
+  .panel-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+    color: #c7c9d1;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 800;
+    margin-bottom: 16px;
+  }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+  .status-list {
+    display: grid;
+    gap: 12px;
+  }
+  .status-item {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 10px;
+    align-items: start;
+    padding: 11px 8px;
+    border-top: 1px solid var(--soft-line);
+  }
+  .status-item:first-of-type { border-top: 0; }
+  .status-item strong { display: block; font-size: 14px; }
+  .status-item span { color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+  .lobby-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+  .lobby-head h2 { margin: 0; font-size: 22px; letter-spacing: -0.03em; }
+  .connection-state { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .connection-state::before { content: ''; width: 8px; height: 8px; background: var(--accent-2); border-radius: 50%; box-shadow: 0 0 12px var(--accent-2); }
+
+  .lobby-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 294px;
+    gap: 24px;
+  }
+
+  .room-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .room-table th {
+    color: #b7bbc5;
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    padding: 0 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .room-table td {
+    padding: 14px 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.055);
+  }
+  .room-code { font-weight: 900; letter-spacing: 0.04em; }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 8px;
+    color: #d7d9df;
+    background: rgba(255,255,255,0.035);
+    font-size: 12px;
+  }
+  .join-btn {
+    border: 0;
+    color: white;
+    background: linear-gradient(180deg, #d66b00, #bd5700);
+    border-radius: 6px;
+    font-weight: 800;
+    padding: 8px 13px;
+  }
+
+  .empty-lobby {
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    padding: 36px 20px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .empty-lobby strong { display: block; color: var(--text); margin-bottom: 6px; }
+
+  .join-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 22px;
+  }
+  .join-row input, .form-card input, .form-card select {
+    min-width: 0;
+    width: 100%;
+    color: var(--text);
+    background: #131419;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 13px;
+    outline: none;
+  }
+  .join-row input:focus, .form-card input:focus, .form-card select:focus { border-color: rgba(245,164,0,0.7); }
+
+  .form-card {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .form-card h3 {
+    margin: 0 0 14px;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    font-size: 13px;
+    color: #b6bac4;
+  }
+  .field { margin-top: 13px; }
+  .field label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 7px; }
+  .segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: #111216;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 3px;
+  }
+  .segmented button {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 7px;
+    padding: 9px 8px;
+    font-size: 13px;
+  }
+  .segmented button.active { color: white; background: #4a4b55; }
+
+  .create-btn {
+    width: 100%;
+    margin-top: 16px;
+    border: 0;
+    border-radius: 8px;
+    color: white;
+    background: linear-gradient(180deg, #d96d00, #bd5700);
+    padding: 13px 14px;
+    font-weight: 900;
+    font-size: 15px;
+  }
+
+  .quick-stack { display: grid; gap: 12px; }
+  .quick-card {
+    min-height: 105px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #44454e;
+    color: white;
+    display: grid;
+    place-items: center;
+    gap: 5px;
+    text-align: center;
+    padding: 18px;
+    text-decoration: none;
+    font-weight: 900;
+    transition: transform 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+  }
+  .quick-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.22); filter: brightness(1.08); }
+  .quick-card.primary { background: linear-gradient(180deg, #e98200, #d06b00); }
+  .quick-card.green { background: linear-gradient(180deg, #1aa956, #128a45); }
+  .quick-card .icon { font-size: 28px; }
+  .quick-card small { color: rgba(255,255,255,0.72); font-weight: 500; }
+
+  .bridge-note {
+    margin-top: 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(245,164,0,0.26);
+    background: rgba(245,164,0,0.08);
+    padding: 12px;
+    color: #f1dba5;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(12px);
+    opacity: 0;
+    pointer-events: none;
+    background: #24262d;
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 12px 15px;
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    transition: all 0.18s ease;
+    font-size: 13px;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+    .side-panel { display: none; }
+    .lobby-layout { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 680px) {
+    .page { width: min(100% - 24px, 1420px); padding-top: 18px; }
+    .topbar { align-items: flex-start; flex-direction: column; gap: 12px; }
+    .main-panel { padding: 18px; }
+    .lobby-head { align-items: flex-start; flex-direction: column; }
+    .join-row { flex-direction: column; }
+    .room-table th:nth-child(3), .room-table td:nth-child(3) { display: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="page">
+    <nav class="topbar">
+      <div class="brand"><div class="brand-mark">♞</div>Ches<span>stein</span></div>
+      <div class="top-actions">
+        <a class="pill" href="gui/?mode=bridge"><strong>Open GUI</strong></a>
+        <span class="pill">Prototype</span>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <h1>Play <span>Chesstein</span></h1>
+      <p>Smart chessboard web interface for local play, Stockfish games, and future online rooms between physical boards and browser players.</p>
+      <button class="hero-cta" onclick="createRoom()">
+        ▶ <span>Create Room<small>public or private</small></span>
+      </button>
+      <div class="online-line"><span><span class="online-dot">●</span> static GitHub Pages build</span><span>·</span><span>local bridge ready</span></div>
+    </section>
+
+    <section class="grid">
+      <aside class="panel side-panel">
+        <div class="panel-title">Project status</div>
+        <div class="status-list">
+          <div class="status-item"><div>♟</div><div><strong>Physical board</strong><span>STM32 firmware is the authority for real board moves.</span></div></div>
+          <div class="status-item"><div>⚡</div><div><strong>Local bridge</strong><span>Python bridge connects browser, Stockfish, and USB serial.</span></div></div>
+          <div class="status-item"><div>🌐</div><div><strong>Online rooms</strong><span>UI is ready; real shared rooms need the multiplayer server pass.</span></div></div>
+        </div>
+      </aside>
+
+      <section class="panel main-panel">
+        <div class="lobby-head">
+          <div>
+            <h2>Live Lobby</h2>
+            <div class="small">Public rooms are currently a frontend prototype on GitHub Pages.</div>
+          </div>
+          <div class="connection-state">Site online</div>
+        </div>
+
+        <div class="lobby-layout">
+          <div>
+            <div class="panel-title">Open rooms <span id="room-count">0</span></div>
+            <div id="room-list"></div>
+            <div class="join-row">
+              <input id="room-code" placeholder="🔗 Enter room code" maxlength="8" onkeydown="if(event.key === 'Enter') joinRoomCode()" />
+              <button class="join-btn" onclick="joinRoomCode()">Join</button>
+            </div>
+          </div>
+
+          <div class="form-card">
+            <h3>Create new game</h3>
+            <div class="field">
+              <label>Room visibility</label>
+              <div class="segmented">
+                <button id="visibility-public" class="active" onclick="setVisibility('public')">Public</button>
+                <button id="visibility-private" onclick="setVisibility('private')">Private</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Play as</label>
+              <select id="play-as">
+                <option value="random">Random</option>
+                <option value="white">White</option>
+                <option value="black">Black</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Bridge URL</label>
+              <input id="bridge-url" value="ws://localhost:8765" />
+            </div>
+            <button class="create-btn" onclick="createRoom()">＋ Create Room</button>
+          </div>
+        </div>
+      </section>
+
+      <aside>
+        <div class="quick-stack">
+          <a class="quick-card primary" href="gui/?mode=ai">
+            <span class="icon">▣</span>
+            <span>vs AI</span>
+            <small>Stockfish plays black through bridge</small>
+          </a>
+          <a class="quick-card" href="gui/?mode=local">
+            <span class="icon">♟</span>
+            <span>Local Game</span>
+            <small>browser-only board</small>
+          </a>
+          <a class="quick-card green" href="gui/?mode=bridge">
+            <span class="icon">⚡</span>
+            <span>Physical Board</span>
+            <small>connect local bridge</small>
+          </a>
+        </div>
+        <div class="bridge-note">
+          For the physical board or Stockfish, keep the bridge running locally, then connect from the GUI to <strong>ws://localhost:8765</strong>.
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+const PUBLIC_ROOMS_KEY = 'chessteinPublicRooms';
+let visibility = 'public';
+
+function generateRoomCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out;
+}
+
+function readRooms() {
+  try { return JSON.parse(localStorage.getItem(PUBLIC_ROOMS_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function writeRooms(rooms) {
+  localStorage.setItem(PUBLIC_ROOMS_KEY, JSON.stringify(rooms.slice(0, 8)));
+}
+
+function setVisibility(next) {
+  visibility = next;
+  document.getElementById('visibility-public').classList.toggle('active', next === 'public');
+  document.getElementById('visibility-private').classList.toggle('active', next === 'private');
+}
+
+function getBridgeUrl() {
+  const input = document.getElementById('bridge-url');
+  const value = (input.value || 'ws://localhost:8765').trim();
+  localStorage.setItem('chessteinBridgeUrl', value);
+  return value;
+}
+
+function guiUrl(params) {
+  const query = new URLSearchParams(params);
+  return `gui/?${query.toString()}`;
+}
+
+function createRoom() {
+  const code = generateRoomCode();
+  const side = document.getElementById('play-as')?.value || 'random';
+  const bridge = getBridgeUrl();
+
+  if (visibility === 'public') {
+    const rooms = readRooms().filter(room => room.code !== code);
+    rooms.unshift({ code, player: 'you', side, mode: 'casual', visibility, createdAt: Date.now() });
+    writeRooms(rooms);
+  }
+
+  window.location.href = guiUrl({ mode: 'room', visibility, room: code, side, bridge });
+}
+
+function joinRoom(code) {
+  const bridge = getBridgeUrl();
+  window.location.href = guiUrl({ mode: 'room', visibility: 'public', room: code, bridge });
+}
+
+function joinRoomCode() {
+  const input = document.getElementById('room-code');
+  const code = (input.value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code) return showToast('Enter a room code first.');
+  window.location.href = guiUrl({ mode: 'room', visibility: 'private', room: code, bridge: getBridgeUrl() });
+}
+
+function renderRooms() {
+  const rooms = readRooms();
+  const list = document.getElementById('room-list');
+  const count = document.getElementById('room-count');
+  count.textContent = `(${rooms.length})`;
+
+  if (!rooms.length) {
+    list.innerHTML = `<div class="empty-lobby"><strong>No public rooms yet</strong>Create a public room to preview the lobby flow.</div>`;
+    return;
+  }
+
+  list.innerHTML = `<table class="room-table">
+    <thead><tr><th>Room</th><th>Player</th><th>Mode</th><th></th></tr></thead>
+    <tbody>${rooms.map(room => `<tr>
+      <td><span class="room-code">${escapeHtml(room.code)}</span></td>
+      <td>${escapeHtml(room.player || 'anon')}</td>
+      <td><span class="tag">${escapeHtml(room.mode || 'casual')}</span></td>
+      <td><button class="join-btn" onclick="joinRoom('${escapeHtml(room.code)}')">Join</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function showToast(text) {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[ch]));
+}
+
+(function init() {
+  const savedBridge = localStorage.getItem('chessteinBridgeUrl');
+  if (savedBridge) document.getElementById('bridge-url').value = savedBridge;
+  renderRooms();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 33.75 33.75" role="img" aria-label="wB">
+  <g transform="translate(0 33.75) scale(1 -1)">
+    <path d="M 6.75 6.75 C 9.293 7.4766 14.332 6.4258 16.875 8.25 C 19.418 6.4258 24.457 7.4766 27 6.75 C 27 6.75 28.2383 6.3438 29.25 5.25 C 28.7383 4.5234 28.0117 4.5078 27 4.875 C 24.457 5.6016 19.418 4.5312 16.875 5.625 C 14.332 4.5312 9.293 5.6016 6.75 4.875 C 5.7344 4.5078 5.0078 4.5234 4.5 5.25 C 5.5156 6.7031 6.75 6.75 6.75 6.75 Z" fill="#ffffff" stroke="none"/>
+    <path d="M 6.75 6.75 C 9.293 7.4766 14.332 6.4258 16.875 8.25 C 19.418 6.4258 24.457 7.4766 27 6.75 C 27 6.75 28.2383 6.3438 29.25 5.25 C 28.7383 4.5234 28.0117 4.5078 27 4.875 C 24.457 5.6016 19.418 4.5312 16.875 5.625 C 14.332 4.5312 9.293 5.6016 6.75 4.875 C 5.7344 4.5078 5.0078 4.5234 4.5 5.25 C 5.5156 6.7031 6.75 6.75 6.75 6.75 Z" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="butt" stroke-linejoin="miter"/>
+    <path d="M 11.25 9.75 C 13.125 7.875 20.625 7.875 22.5 9.75 C 22.875 10.875 22.5 11.25 22.5 11.25 C 22.5 13.125 20.625 14.25 20.625 14.25 C 24.75 15.375 25.125 22.875 16.875 25.875 C 8.625 22.875 9 15.375 13.125 14.25 C 13.125 14.25 11.25 13.125 11.25 11.25 C 11.25 11.25 10.875 10.875 11.25 9.75 Z" fill="#ffffff" stroke="none"/>
+    <path d="M 11.25 9.75 C 13.125 7.875 20.625 7.875 22.5 9.75 C 22.875 10.875 22.5 11.25 22.5 11.25 C 22.5 13.125 20.625 14.25 20.625 14.25 C 24.75 15.375 25.125 22.875 16.875 25.875 C 8.625 22.875 9 15.375 13.125 14.25 C 13.125 14.25 11.25 13.125 11.25 11.25 C 11.25 11.25 10.875 10.875 11.25 9.75 Z" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="butt" stroke-linejoin="miter"/>
+    <path d="M 18.75 27.75 C 18.75 25.25 15 25.25 15 27.75 C 15 30.25 18.75 30.25 18.75 27.75 Z" fill="#ffffff" stroke="none"/>
+    <path d="M 18.75 27.75 C 18.75 25.25 15 25.25 15 27.75 C 15 30.25 18.75 30.25 18.75 27.75 Z" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="butt" stroke-linejoin="miter"/>
+    <path d="M 13.125 14.25 L 20.625 14.25" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="round" stroke-linejoin="miter"/>
+    <path d="M 11.25 11.25 L 22.5 11.25" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="round" stroke-linejoin="miter"/>
+    <path d="M 16.875 22.125 L 16.875 18.375" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="round" stroke-linejoin="miter"/>
+    <path d="M 15 20.25 L 18.75 20.25" fill="none" stroke="#000000" stroke-width="1.125" stroke-linecap="round" stroke-linejoin="miter"/>
+  </g>
+</svg>
