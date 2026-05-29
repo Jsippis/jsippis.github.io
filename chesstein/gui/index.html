@@ -83,6 +83,7 @@
   }
 
   .logo {
+    white-space: nowrap;
     font-family: 'Fraunces', serif;
     font-size: 28px;
     font-weight: 300;
@@ -381,6 +382,22 @@
   }
   .game-actions button.danger { border-color: rgba(224, 90, 78, 0.6); color: #f0aaa3; }
   .game-actions button.danger:hover { border-color: var(--ws-err); color: var(--ws-err); }
+  .draw-offer-panel, .game-over-panel {
+    margin-top: 10px;
+    border: 1px solid rgba(201, 162, 39, 0.28);
+    background: rgba(201, 162, 39, 0.08);
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .draw-offer-panel .muted, .game-over-panel .muted {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 3px;
+  }
+  .mini-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .mini-actions button { flex: 1; }
 
   .promotion-modal {
     display: none;
@@ -487,6 +504,8 @@
         <button onclick="offerDraw()">offer draw</button>
         <button class="danger" onclick="resignGame()">resign</button>
       </div>
+      <div class="draw-offer-panel" id="draw-offer-panel" style="display:none;"></div>
+      <div class="game-over-panel" id="online-game-over" style="display:none;"></div>
     </div>
 
     <div class="card">
@@ -558,7 +577,10 @@ let state = {
   gameOver: false,
   playerColor: null,
   roomStatus: null,
-  opponentConnected: false
+  opponentConnected: false,
+  drawOfferBy: null,
+  result: null,
+  endReason: null
 };
 
 let ws = null;
@@ -1135,6 +1157,25 @@ function handleMessage(msg) {
       if (msg.room) applyOnlineRoom(msg.room);
       break;
 
+    case 'draw_offer':
+      if (msg.room) applyOnlineRoom(msg.room);
+      setStatus(msg.offeredBy === state.playerColor ? 'Draw offer sent.' : 'Opponent offered a draw.');
+      break;
+
+    case 'draw_declined':
+      if (msg.room) applyOnlineRoom(msg.room);
+      setStatus('Draw offer declined.');
+      break;
+
+    case 'game_over':
+      if (msg.room) applyOnlineRoom(msg.room);
+      state.gameOver = true;
+      state.result = msg.result || state.result;
+      state.endReason = msg.reason || state.endReason;
+      updateOnlineMeta(msg.room || {});
+      setStatus(formatGameOverText(state.result, state.endReason), true);
+      break;
+
     case 'cancelled':
     case 'room_closed':
       state.gameOver = true;
@@ -1205,11 +1246,6 @@ function handleMessage(msg) {
       setStatus(`Stockfish played: ${msg.san || msg.uci || ''}`);
       break;
 
-    case 'game_over':
-      state.gameOver = true;
-      setStatus(msg.reason || 'Game over.', true);
-      break;
-
     case 'board_move':
       applyMoveMessage(msg);
       if (msg.san) {
@@ -1236,6 +1272,9 @@ function normalizeFenForGui(fen) {
 function applyOnlineRoom(room) {
   if (!room) return;
   state.roomStatus = room.status || state.roomStatus;
+  state.drawOfferBy = room.drawOfferBy || null;
+  state.result = room.result || state.result;
+  state.endReason = room.endReason || state.endReason;
   if (room.fen) applyFen(normalizeFenForGui(room.fen));
   if (Array.isArray(room.history)) {
     setHistoryFromSans(room.history.map(item => typeof item === 'string' ? item : (item.san || item.uci || '')).filter(Boolean));
@@ -1265,16 +1304,117 @@ function updateOnlineMeta(room = {}) {
   document.getElementById('online-player-color').textContent = color;
   document.getElementById('online-room-status').textContent = status;
   document.getElementById('online-opponent').textContent = opponentText;
+
   const actions = document.getElementById('online-actions');
-  if (actions) actions.style.display = status === 'active' ? '' : 'none';
+  if (actions) actions.style.display = status === 'active' && !state.gameOver ? '' : 'none';
+
+  renderDrawOfferPanel();
+  renderOnlineGameOverPanel();
+}
+
+function sendOnlineMessage(payload) {
+  if (!isOnlineGame()) {
+    setStatus('This action is only available in online rooms.');
+    return false;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    setStatus('Online room is not connected.', true);
+    return false;
+  }
+  ws.send(JSON.stringify(payload));
+  return true;
 }
 
 function offerDraw() {
-  setStatus('Draw offers are planned for the next online pass.');
+  if (state.gameOver) return;
+  if (state.drawOfferBy === state.playerColor) {
+    setStatus('Draw offer already sent.');
+    return;
+  }
+  if (sendOnlineMessage({ type: 'draw_offer' })) {
+    setStatus('Draw offer sent.');
+  }
+}
+
+function acceptDraw() {
+  if (sendOnlineMessage({ type: 'draw_accept' })) {
+    setStatus('Accepting draw offer...');
+  }
+}
+
+function declineDraw() {
+  if (sendOnlineMessage({ type: 'draw_decline' })) {
+    setStatus('Draw offer declined.');
+  }
 }
 
 function resignGame() {
-  setStatus('Resign is planned for the next online pass.');
+  if (state.gameOver) return;
+  if (!confirm('Resign this game?')) return;
+  if (sendOnlineMessage({ type: 'resign' })) {
+    setStatus('Resignation sent.');
+  }
+}
+
+function backToLobby() {
+  window.location.href = '../';
+}
+
+function renderDrawOfferPanel() {
+  const panel = document.getElementById('draw-offer-panel');
+  if (!panel) return;
+  const offerBy = state.drawOfferBy;
+  const active = state.roomStatus === 'active' && !state.gameOver && !!offerBy;
+  panel.style.display = active ? '' : 'none';
+  if (!active) {
+    panel.innerHTML = '';
+    return;
+  }
+
+  if (offerBy === state.playerColor) {
+    panel.innerHTML = `<strong>Draw offer sent</strong><div class="muted">Waiting for your opponent to accept or decline.</div>`;
+    return;
+  }
+
+  panel.innerHTML = `<strong>Opponent offered a draw</strong>
+    <div class="muted">Accept to end the game as ½–½, or decline to keep playing.</div>
+    <div class="mini-actions">
+      <button onclick="acceptDraw()">accept</button>
+      <button onclick="declineDraw()">decline</button>
+    </div>`;
+}
+
+function renderOnlineGameOverPanel() {
+  const panel = document.getElementById('online-game-over');
+  if (!panel) return;
+  const finished = isOnlineGame() && state.gameOver;
+  panel.style.display = finished ? '' : 'none';
+  if (!finished) {
+    panel.innerHTML = '';
+    return;
+  }
+
+  panel.innerHTML = `<strong>${escapeHtml(formatGameOverText(state.result, state.endReason))}</strong>
+    <div class="muted">This room is finished. Rematch flow comes later.</div>
+    <div class="mini-actions">
+      <button onclick="backToLobby()">back to lobby</button>
+    </div>`;
+}
+
+function formatGameOverText(result, reason) {
+  if (reason === 'draw_agreed') return 'Game over: draw agreed.';
+  if (reason === 'white_resigned') return 'Game over: Black wins by resignation.';
+  if (reason === 'black_resigned') return 'Game over: White wins by resignation.';
+  if (reason === 'empty_room') return 'Room abandoned.';
+  if (reason === 'cancelled') return 'Room cancelled.';
+  if (result) return `Game over: ${result}`;
+  return 'Game over.';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+  }[char]));
 }
 
 function movesFromUciList(moves) {

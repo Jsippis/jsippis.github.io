@@ -59,6 +59,11 @@
     letter-spacing: -0.04em;
     font-size: clamp(28px, 4vw, 48px);
   }
+  .brand-word {
+    display: inline-block;
+    white-space: nowrap;
+    line-height: 1;
+  }
   .brand-mark {
     width: 42px;
     height: 42px;
@@ -386,7 +391,7 @@
 <body>
   <main class="page">
     <nav class="topbar">
-      <div class="brand"><div class="brand-mark">♞</div><span class="brand-white">Ches</span><span class="brand-accent">stein</span></div>
+      <div class="brand"><div class="brand-mark">♞</div><span class="brand-word"><span class="brand-white">Ches</span><span class="brand-accent">stein</span></span></div>
       <div class="top-actions">
         <a class="pill" href="gui/?mode=bridge"><strong>Open GUI</strong></a>
         <span class="pill">Prototype</span>
@@ -394,7 +399,7 @@
     </nav>
 
     <section class="hero">
-      <h1><span class="brand-white">Ches</span><span class="brand-accent">stein</span></h1>
+      <h1><span class="brand-word"><span class="brand-white">Ches</span><span class="brand-accent">stein</span></span></h1>
       <p>Smart chessboard web interface for local play, Stockfish games, and online rooms between physical boards and browser players.</p>
       <button class="hero-cta" onclick="createRoom()">
         ▶ <span>Create Room<small>wait here until someone joins</small></span>
@@ -448,7 +453,7 @@
             </div>
             <div class="field">
               <label>Room server URL</label>
-              <input id="server-url" placeholder="https://your-worker.workers.dev" />
+              <input id="server-url" value="https://chesstein.jospire1.workers.dev" placeholder="https://chesstein.jospire1.workers.dev" />
             </div>
             <button class="create-btn" onclick="createRoom()">＋ Create Room</button>
           </div>
@@ -735,7 +740,7 @@ function joinRoomCode() {
 async function refreshRooms() {
   const server = getServerUrl();
   if (!server) {
-    setServerState('offline', 'Server not configured');
+    setServerState('offline', 'Room server not connected');
     renderRooms(readPreviewRooms().map(room => ({
       roomCode: room.code,
       player: room.player,
@@ -797,7 +802,7 @@ function escapeHtml(value) {
 
 (function init() {
   const savedServer = localStorage.getItem('chessteinServerUrl');
-  if (savedServer) document.getElementById('server-url').value = savedServer;
+  document.getElementById('server-url').value = savedServer || 'https://chesstein.jospire1.workers.dev';
   const savedName = localStorage.getItem('chessteinPlayerName');
   if (savedName) document.getElementById('player-name').value = savedName;
 

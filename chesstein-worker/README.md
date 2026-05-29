@@ -9,11 +9,14 @@ The frontend can stay on GitHub Pages. This Worker only handles backend work:
 - one WebSocket endpoint per room
 - one Durable Object per game room
 - a lobby Durable Object for public room listings
-- waiting -> active -> cancelled/abandoned room lifecycle
+- waiting -> active -> finished/cancelled/abandoned room lifecycle
 - creator is White, second player is Black
 - relay/store FEN and move history
+- draw offer / accept / decline
+- resign / game-over broadcasts
+- empty-room cleanup
 
-It does **not** validate chess moves yet. That should be a later pass with `chess.js` or explicit validation logic.
+It has basic turn ownership checks, but it does **not** fully validate chess moves yet. That should be a later pass with `chess.js` or explicit validation logic.
 
 ## Folder placement
 
@@ -21,8 +24,8 @@ Put this folder in the root of your GitHub Pages repo:
 
 ```text
 jsippis.github.io/
-  smartchess/          # current frontend, still hosted by GitHub Pages
-  chesstein-worker/    # this backend, deployed by Cloudflare Workers
+  chesstein/          # frontend, still hosted by GitHub Pages
+  chesstein-worker/   # backend, deployed by Cloudflare Workers
 ```
 
 ## Local setup
@@ -152,6 +155,17 @@ ws.send(JSON.stringify({
   history: ["e4"]
 }));
 ```
+
+Draw / resign messages:
+
+```js
+ws.send(JSON.stringify({ type: "draw_offer" }));
+ws.send(JSON.stringify({ type: "draw_accept" }));
+ws.send(JSON.stringify({ type: "draw_decline" }));
+ws.send(JSON.stringify({ type: "resign" }));
+```
+
+The room broadcasts `draw_offer`, `draw_declined`, `room_update`, and `game_over` messages back to connected clients.
 
 ## Frontend origin
 

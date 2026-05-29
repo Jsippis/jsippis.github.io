@@ -1,6 +1,7 @@
 const START_FEN = 'startpos';
 const MAX_PUBLIC_ROOMS = 50;
 const EMPTY_ROOM_TTL_MS = 30_000;
+const FINISHED_ROOM_TTL_MS = 5 * 60_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -46,6 +47,7 @@ function initialSnapshot(roomCode) {
     result: null,
     endReason: null,
     drawOfferBy: null,
+    turn: 'white',
   };
 }
 
@@ -87,6 +89,24 @@ function publicSnapshot(snapshot) {
 
 function playerMatches(player, token) {
   return !!player && !!token && player.token === token;
+}
+
+function otherColor(color) {
+  return color === 'white' ? 'black' : color === 'black' ? 'white' : null;
+}
+
+function resultForResignation(color) {
+  return color === 'white' ? '0-1' : '1-0';
+}
+
+function turnColorFromFen(fen) {
+  if (!fen || fen === START_FEN || fen === START_FEN.split(' ')[0] || fen === 'startpos') return 'white';
+  const parts = String(fen).trim().split(/\s+/);
+  return parts[1] === 'b' ? 'black' : 'white';
+}
+
+function publicDrawOffer(drawOfferBy) {
+  return drawOfferBy || null;
 }
 
 export class Lobby {
@@ -153,9 +173,16 @@ export class GameRoom {
     if (this.snapshot.status === 'waiting' || this.snapshot.status === 'active') {
       this.snapshot.status = 'abandoned';
       this.snapshot.updatedAt = nowIso();
+      this.snapshot.endedAt = this.snapshot.endedAt || nowIso();
+      this.snapshot.endReason = 'empty_room';
       this.snapshot.players.white = null;
       this.snapshot.players.black = null;
       await this.storage.put('snapshot', this.snapshot);
+      await this.removeFromLobby();
+      return;
+    }
+
+    if (this.snapshot.status === 'finished') {
       await this.removeFromLobby();
     }
   }
@@ -362,10 +389,24 @@ export class GameRoom {
       }
     }
 
+    if (this.snapshot?.status === 'waiting' && session.color === 'white' && !stillConnected) {
+      this.snapshot.status = 'abandoned';
+      this.snapshot.endedAt = nowIso();
+      this.snapshot.endReason = 'host_left';
+      await this.saveSnapshot();
+      await this.removeFromLobby();
+      this.broadcast({ type: 'room_closed', room: publicSnapshot(this.snapshot) });
+      for (const socket of this.sessions.keys()) {
+        try { socket.close(1000, 'host_left'); } catch {}
+      }
+      return;
+    }
+
     await this.saveSnapshot();
     this.broadcastPresence();
 
     if (this.sessions.size === 0) {
+      await this.removeFromLobby();
       await this.storage.setAlarm(Date.now() + EMPTY_ROOM_TTL_MS);
     }
   }
@@ -395,6 +436,27 @@ export class GameRoom {
         await this.applyBoardUpdate(session, message);
         break;
 
+      case 'draw_offer':
+        await this.offerDraw(session);
+        break;
+
+      case 'draw_accept':
+        await this.acceptDraw(session);
+        break;
+
+      case 'draw_decline':
+        await this.declineDraw(session);
+        break;
+
+      case 'resign':
+      case 'forfeit':
+        await this.resign(session);
+        break;
+
+      case 'leave_room':
+        try { socket.close(1000, 'client_left'); } catch {}
+        break;
+
       case 'cancel_room':
         if (!playerMatches(this.snapshot.players.white, session.token)) {
           this.send(socket, { type: 'error', message: 'Only the room creator can cancel this room.' });
@@ -417,19 +479,38 @@ export class GameRoom {
     }
   }
 
-  async applyBoardUpdate(session, message) {
+  ensureActivePlayer(session) {
     if (this.snapshot.status !== 'active') {
-      this.sendToToken(session.token, { type: 'error', message: 'Game has not started yet.' });
-      return;
+      return 'Game has not started yet.';
     }
 
     if (session.color !== 'white' && session.color !== 'black') {
-      this.sendToToken(session.token, { type: 'error', message: 'Spectators cannot move.' });
+      return 'Spectators cannot act in this game.';
+    }
+
+    return null;
+  }
+
+  async applyBoardUpdate(session, message) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    const expectedTurn = this.snapshot.turn || turnColorFromFen(this.snapshot.fen);
+    if (expectedTurn && expectedTurn !== session.color) {
+      this.sendToToken(session.token, { type: 'error', message: `It is ${expectedTurn}'s turn.` });
       return;
     }
 
     if (typeof message.fen === 'string' && message.fen.trim()) {
       this.snapshot.fen = message.fen.trim();
+      this.snapshot.turn = turnColorFromFen(this.snapshot.fen);
+    } else if (message.turn === 'white' || message.turn === 'black') {
+      this.snapshot.turn = message.turn;
+    } else {
+      this.snapshot.turn = otherColor(session.color) || this.snapshot.turn;
     }
 
     if (Array.isArray(message.history)) {
@@ -451,6 +532,115 @@ export class GameRoom {
       room: publicSnapshot(this.snapshot),
       move: { uci: message.uci || null, san: message.san || null },
     });
+  }
+
+  async offerDraw(session) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    if (this.snapshot.drawOfferBy === session.color) {
+      this.sendToToken(session.token, { type: 'status', message: 'Draw offer already sent.' });
+      return;
+    }
+
+    this.snapshot.drawOfferBy = session.color;
+    await this.saveSnapshot();
+
+    this.broadcast({
+      type: 'draw_offer',
+      offeredBy: session.color,
+      from: this.publicSession(session),
+      room: publicSnapshot(this.snapshot),
+    });
+  }
+
+  async acceptDraw(session) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    const offerBy = publicDrawOffer(this.snapshot.drawOfferBy);
+    if (!offerBy) {
+      this.sendToToken(session.token, { type: 'error', message: 'There is no draw offer to accept.' });
+      return;
+    }
+
+    if (offerBy === session.color) {
+      this.sendToToken(session.token, { type: 'error', message: 'You cannot accept your own draw offer.' });
+      return;
+    }
+
+    await this.finishGame({
+      result: '1/2-1/2',
+      reason: 'draw_agreed',
+      by: session.color,
+    });
+  }
+
+  async declineDraw(session) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    const offerBy = publicDrawOffer(this.snapshot.drawOfferBy);
+    if (!offerBy) {
+      this.sendToToken(session.token, { type: 'error', message: 'There is no draw offer to decline.' });
+      return;
+    }
+
+    if (offerBy === session.color) {
+      this.sendToToken(session.token, { type: 'error', message: 'You cannot decline your own draw offer.' });
+      return;
+    }
+
+    this.snapshot.drawOfferBy = null;
+    await this.saveSnapshot();
+    this.broadcast({
+      type: 'draw_declined',
+      declinedBy: session.color,
+      room: publicSnapshot(this.snapshot),
+    });
+  }
+
+  async resign(session) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    await this.finishGame({
+      result: resultForResignation(session.color),
+      reason: `${session.color}_resigned`,
+      by: session.color,
+    });
+  }
+
+  async finishGame({ result, reason, by }) {
+    this.snapshot.status = 'finished';
+    this.snapshot.result = result || null;
+    this.snapshot.endReason = reason || 'game_finished';
+    this.snapshot.endedAt = nowIso();
+    this.snapshot.drawOfferBy = null;
+    await this.saveSnapshot();
+    await this.removeFromLobby();
+
+    const payload = {
+      type: 'game_over',
+      result: this.snapshot.result,
+      reason: this.snapshot.endReason,
+      by: by || null,
+      room: publicSnapshot(this.snapshot),
+    };
+    this.broadcast(payload);
+    await this.storage.setAlarm(Date.now() + FINISHED_ROOM_TTL_MS);
   }
 
   async cancelRoom(status = 'cancelled') {

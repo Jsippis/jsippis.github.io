@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "chesstein-worker",
+  "name": "chesstein",
   "main": "src/index.js",
   "compatibility_date": "2025-12-01",
   "workers_dev": true,
