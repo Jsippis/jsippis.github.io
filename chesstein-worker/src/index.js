@@ -117,6 +117,8 @@ export default {
         playerToken,
         name: String(body.name || 'Player').slice(0, 32),
         clientType: body.clientType || 'gui',
+        role: body.role || body.clientRole || body.playerRole || (body.clientType === 'bridge' ? 'bridge' : 'player'),
+        clientId: String(body.clientId || '').slice(0, 80),
       };
 
       const room = getRoomStub(env, roomCode);
@@ -137,10 +139,24 @@ export default {
         room: initData.room,
         roomCode,
         playerToken,
+        bridgeJoinToken: initPayload.role === 'bridge' ? playerToken : undefined,
         color: 'white',
         roomUrl: `${url.origin}/api/rooms/${roomCode}`,
-        wsUrl: `${wsProtocol}//${url.host}/ws/rooms/${roomCode}?token=${encodeURIComponent(playerToken)}&client=gui`,
+        wsUrl: `${wsProtocol}//${url.host}/ws/rooms/${roomCode}?token=${encodeURIComponent(playerToken)}&client=${encodeURIComponent(initPayload.clientType === 'bridge' ? 'bridge' : 'gui')}&role=${encodeURIComponent(initPayload.role)}&clientId=${encodeURIComponent(initPayload.clientId)}`,
       }, 201);
+    }
+
+    const bridgeTokenRoomCode = roomCodeFromPath(url.pathname, '/api/rooms/');
+    if (bridgeTokenRoomCode && request.method === 'POST' && url.pathname.endsWith('/bridge-token')) {
+      const room = getRoomStub(env, bridgeTokenRoomCode);
+      const body = await parseJson(request);
+      const response = await room.fetch(new Request(`https://room/bridge-token?roomCode=${bridgeTokenRoomCode}`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(body),
+      }));
+      const data = await response.json();
+      return jsonResponse(request, env, data, response.status);
     }
 
     const apiRoomCode = roomCodeFromPath(url.pathname, '/api/rooms/');

@@ -542,6 +542,7 @@ const PUBLIC_ROOMS_KEY = 'chessteinPublicRoomsPreview';
 const WAITING_ROOM_KEY = 'chessteinWaitingRoom';
 const DEFAULT_ROOM_SERVER_URL = 'https://chesstein.jospire1.workers.dev';
 const DEFAULT_LOCAL_BRIDGE_URL = 'ws://localhost:8765';
+const CLIENT_ID_KEY = 'chessteinClientId';
 let visibility = 'public';
 let waitSocket = null;
 let localBridgeSocket = null;
@@ -570,6 +571,15 @@ function getPlayerName() {
   const value = (input.value || 'Player').trim().slice(0, 24) || 'Player';
   localStorage.setItem('chessteinPlayerName', value);
   return value;
+}
+
+function getClientId() {
+  let id = localStorage.getItem(CLIENT_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    localStorage.setItem(CLIENT_ID_KEY, id);
+  }
+  return id;
 }
 
 function readPreviewRooms() {
@@ -608,7 +618,9 @@ function spectatorWsUrl(base, roomCode, name, viewColor = 'white') {
   http.pathname = `/ws/rooms/${encodeURIComponent(roomCode)}`;
   http.search = '';
   http.searchParams.set('name', `${name} view`);
-  http.searchParams.set('client', 'spectator');
+  http.searchParams.set('client', 'companion');
+  http.searchParams.set('role', 'companion');
+  http.searchParams.set('clientId', getClientId());
   http.searchParams.set('view', viewColor);
   return http.toString();
 }
@@ -705,6 +717,8 @@ function roomWsUrl(base, roomCode, token, name) {
   http.searchParams.set('token', token);
   http.searchParams.set('name', name);
   http.searchParams.set('client', 'gui');
+  http.searchParams.set('role', 'player');
+  http.searchParams.set('clientId', getClientId());
   return http.toString();
 }
 
@@ -726,7 +740,7 @@ async function createRoom() {
     const response = await fetch(`${server}/api/rooms`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ visibility, name, clientType: 'gui' })
+      body: JSON.stringify({ visibility, name, clientType: 'gui', role: 'player', clientId: getClientId() })
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'room_create_failed');
@@ -753,21 +767,40 @@ async function createRoom() {
 
 async function createRoomWithBridge(server, name) {
   try {
-    setServerState('', 'Asking local bridge to create room…');
-    const response = await bridgeRequest({
-      type: 'create_online_room',
-      visibility,
+    setServerState('', 'Creating physical-board room…');
+    await ensureLocalBridge();
+
+    const response = await fetch(`${server}/api/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        visibility,
+        name: name || 'Physical board',
+        clientType: 'bridge',
+        role: 'bridge',
+        clientId: getClientId(),
+      })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'room_create_failed');
+
+    const roomCode = String(data.room?.roomCode || data.roomCode || '').toUpperCase();
+    const bridgeJoinToken = String(data.bridgeJoinToken || data.playerToken || '');
+    if (!roomCode || !bridgeJoinToken) throw new Error('Room server did not return a bridge token.');
+
+    await bridgeRequest({
+      type: 'connect_online_room',
+      room: roomCode,
       server,
+      token: bridgeJoinToken,
       name: name || 'Physical board'
     }, 15000);
 
-    const roomCode = String(response.room || response.roomCode || '').toUpperCase();
-    if (!roomCode) throw new Error('Bridge did not return a room code.');
-
     waitingRoom = {
       roomCode,
-      visibility,
+      visibility: data.room?.visibility || visibility,
       playerToken: '',
+      bridgeJoinToken,
       color: 'white',
       server,
       wsUrl: spectatorWsUrl(server, roomCode, name, 'white'),
@@ -782,7 +815,7 @@ async function createRoomWithBridge(server, name) {
     setServerState('', 'Physical board room created');
     showToast(`Physical board created room ${roomCode}.`);
   } catch (error) {
-    setServerState('error', 'Local bridge error');
+    setServerState('error', 'Physical board room error');
     showToast(`Could not create physical-board room: ${error.message}`);
   }
 }
@@ -829,7 +862,7 @@ function connectWaitingSocket() {
         ? spectatorWsUrl(waitingRoom.server, code, waitingRoom.name, view)
         : roomWsUrl(waitingRoom.server, code, waitingRoom.playerToken, waitingRoom.name);
       localStorage.removeItem(WAITING_ROOM_KEY);
-      window.location.href = guiUrl({ mode: 'online', room: code, color, client: waitingRoom.isBridgeHost ? 'spectator' : 'gui', view, token: waitingRoom.playerToken || '', ws: wsUrl });
+      window.location.href = guiUrl({ mode: 'online', room: code, color, client: waitingRoom.isBridgeHost ? 'companion' : 'gui', view, token: waitingRoom.playerToken || '', ws: wsUrl });
     } else if (msg.type === 'cancelled' || msg.type === 'room_closed') {
       clearWaitingRoom();
       showToast('Room closed.');
@@ -914,50 +947,47 @@ function getLocalBridgeUrl() {
 
 function copyBridgeCommand() {
   if (!waitingRoom) return;
-  const command = `python stockfish_bridge.py --online-room ${waitingRoom.roomCode}`;
+  const tokenPart = waitingRoom.bridgeJoinToken ? ` --online-token ${waitingRoom.bridgeJoinToken}` : '';
+  const command = `python stockfish_bridge.py --online-room ${waitingRoom.roomCode}${tokenPart}`;
   navigator.clipboard?.writeText(command);
   showToast('Bridge command copied.');
 }
 
-function connectLocalBridgeToWaitingRoom() {
+async function connectLocalBridgeToWaitingRoom() {
   if (!waitingRoom) return;
   if (!waitingRoom.server) {
     showToast('Real room server required before connecting a physical board.');
     return;
   }
 
-  const url = getLocalBridgeUrl();
   try {
-    if (localBridgeSocket) localBridgeSocket.close();
-    localBridgeSocket = new WebSocket(url);
-  } catch {
-    showToast('Invalid local bridge URL.');
-    return;
-  }
+    setServerState('', 'Reserving physical board seat…');
+    await ensureLocalBridge();
+    const response = await fetch(`${waitingRoom.server}/api/rooms/${encodeURIComponent(waitingRoom.roomCode)}/bridge-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Physical board', clientId: getClientId() })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'bridge_token_failed');
 
-  setServerState('', 'Connecting local bridge…');
-  localBridgeSocket.onopen = () => {
-    localBridgeSocket.send(JSON.stringify({
+    const bridgeJoinToken = String(data.bridgeJoinToken || '');
+    if (!bridgeJoinToken) throw new Error('Room server did not return a bridge token.');
+    waitingRoom.bridgeJoinToken = bridgeJoinToken;
+    localStorage.setItem(WAITING_ROOM_KEY, JSON.stringify(waitingRoom));
+
+    await bridgeRequest({
       type: 'connect_online_room',
       room: waitingRoom.roomCode,
       server: waitingRoom.server,
+      token: bridgeJoinToken,
       name: 'Physical board'
-    }));
-    showToast('Room code sent to local bridge.');
-  };
-  localBridgeSocket.onerror = () => {
-    setServerState('error', 'Local bridge not detected');
-    showToast('Could not reach local bridge. Start Chesstein Bridge, then retry.');
-  };
-  localBridgeSocket.onmessage = (event) => {
-    let msg = null;
-    try { msg = JSON.parse(event.data); } catch { return; }
-    if (msg.type === 'online_room_status' || msg.type === 'status') {
-      showToast(msg.message || 'Local bridge updated.');
-    } else if (msg.type === 'error') {
-      showToast(msg.message || 'Local bridge error.');
-    }
-  };
+    }, 15000);
+    showToast('Physical board joined the room.');
+  } catch (error) {
+    setServerState('error', 'Local bridge error');
+    showToast(`Could not connect physical board: ${error.message}`);
+  }
 }
 
 async function joinRoom(code) {
@@ -1004,15 +1034,30 @@ async function joinRoom(code) {
 
 async function joinRoomWithBridge(server, cleanCode, name) {
   try {
-    setServerState('', 'Connecting physical board to room…');
+    setServerState('', 'Reserving physical board seat…');
+    await ensureLocalBridge();
+    const response = await fetch(`${server}/api/rooms/${encodeURIComponent(cleanCode)}/bridge-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: name || 'Physical board', clientId: getClientId() })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'bridge_token_failed');
+
+    const bridgeJoinToken = String(data.bridgeJoinToken || '');
+    const color = data.color || 'black';
+    if (!bridgeJoinToken) throw new Error('Room server did not return a bridge token.');
+
     await bridgeRequest({
       type: 'connect_online_room',
       room: cleanCode,
       server,
+      token: bridgeJoinToken,
       name: name || 'Physical board'
     }, 15000);
-    const wsUrl = spectatorWsUrl(server, cleanCode, name, 'black');
-    window.location.href = guiUrl({ mode: 'online', room: cleanCode, color: 'spectator', client: 'spectator', view: 'black', ws: wsUrl });
+
+    const wsUrl = spectatorWsUrl(server, cleanCode, name, color);
+    window.location.href = guiUrl({ mode: 'online', room: cleanCode, color: 'spectator', client: 'companion', view: color, ws: wsUrl });
   } catch (error) {
     setServerState('error', 'Local bridge error');
     showToast(`Could not join with physical board: ${error.message}`);

@@ -4,6 +4,7 @@ const START_FEN = 'startpos';
 const MAX_PUBLIC_ROOMS = 50;
 const EMPTY_ROOM_TTL_MS = 30_000;
 const FINISHED_ROOM_TTL_MS = 5 * 60_000;
+const BRIDGE_TOKEN_TTL_MS = 5 * 60_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -20,12 +21,30 @@ function normalizeRoomCode(value) {
 
 function sanitizeClientType(value) {
   const text = String(value || '').toLowerCase();
-  if (['gui', 'bridge', 'spectator', 'bot'].includes(text)) return text;
+  if (['gui', 'bridge', 'companion', 'spectator', 'bot'].includes(text)) return text;
   return 'gui';
 }
 
 function sanitizeVisibility(value) {
   return String(value || '').toLowerCase() === 'public' ? 'public' : 'private';
+}
+
+function sanitizeRole(value, clientType = 'gui') {
+  const text = String(value || '').toLowerCase();
+  if (['player', 'bridge', 'companion', 'spectator'].includes(text)) return text;
+  const type = sanitizeClientType(clientType);
+  if (type === 'bridge') return 'bridge';
+  if (type === 'companion') return 'companion';
+  if (type === 'spectator') return 'spectator';
+  return 'player';
+}
+
+function roleCanClaimSeat(role) {
+  return role === 'player' || role === 'bridge';
+}
+
+function sanitizeClientId(value) {
+  return String(value || '').trim().slice(0, 80);
 }
 
 function sanitizeName(value) {
@@ -59,6 +78,7 @@ function publicPlayer(player) {
   return {
     name: player.name,
     clientType: player.clientType,
+    role: player.role || (player.clientType === 'bridge' ? 'bridge' : 'player'),
     connected: !!player.connected,
     joinedAt: player.joinedAt,
   };
@@ -91,7 +111,13 @@ function publicSnapshot(snapshot) {
 }
 
 function playerMatches(player, token) {
-  return !!player && !!token && player.token === token;
+  if (!player || !token || player.token !== token) return false;
+  if (player.tokenExpiresAt && Date.parse(player.tokenExpiresAt) < Date.now()) return false;
+  return true;
+}
+
+function bridgeTokenExpiresAt() {
+  return new Date(Date.now() + BRIDGE_TOKEN_TTL_MS).toISOString();
 }
 
 function otherColor(color) {
@@ -283,6 +309,9 @@ export class GameRoom {
               token,
               name: sanitizeName(payload.name),
               clientType: sanitizeClientType(payload.clientType),
+              role: sanitizeRole(payload.role, payload.clientType),
+              clientId: sanitizeClientId(payload.clientId),
+              tokenExpiresAt: sanitizeRole(payload.role, payload.clientType) === 'bridge' ? bridgeTokenExpiresAt() : null,
               connected: false,
               joinedAt: nowIso(),
             },
@@ -310,6 +339,12 @@ export class GameRoom {
       }
       await this.cancelRoom('cancelled');
       return Response.json({ ok: true });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/bridge-token') {
+      const payload = await request.json().catch(() => ({}));
+      await this.loadSnapshot(normalizeRoomCode(url.searchParams.get('roomCode')) || 'UNKNOWN');
+      return this.reserveBridgeSeat(payload);
     }
 
     if (request.headers.get('Upgrade') === 'websocket') {
@@ -368,13 +403,17 @@ export class GameRoom {
   createSession(url) {
     const token = String(url.searchParams.get('token') || crypto.randomUUID());
     const clientType = sanitizeClientType(url.searchParams.get('client'));
+    const role = sanitizeRole(url.searchParams.get('role'), clientType);
     const name = sanitizeName(url.searchParams.get('name'));
+    const clientId = sanitizeClientId(url.searchParams.get('clientId'));
 
     return {
       id: crypto.randomUUID(),
       token,
       name,
       clientType,
+      role,
+      clientId,
       color: 'spectator',
       joinedAt: nowIso(),
     };
@@ -386,6 +425,10 @@ export class GameRoom {
       this.snapshot.players.white.connected = true;
       this.snapshot.players.white.name = session.name;
       this.snapshot.players.white.clientType = session.clientType;
+      this.snapshot.players.white.role = session.role;
+      this.snapshot.players.white.clientId = session.clientId || this.snapshot.players.white.clientId || '';
+      this.snapshot.players.white.tokenExpiresAt = null;
+      this.startIfReady();
       return;
     }
 
@@ -394,24 +437,80 @@ export class GameRoom {
       this.snapshot.players.black.connected = true;
       this.snapshot.players.black.name = session.name;
       this.snapshot.players.black.clientType = session.clientType;
+      this.snapshot.players.black.role = session.role;
+      this.snapshot.players.black.clientId = session.clientId || this.snapshot.players.black.clientId || '';
+      this.snapshot.players.black.tokenExpiresAt = null;
+      this.startIfReady();
       return;
     }
 
-    if (session.clientType !== 'spectator' && this.snapshot.status === 'waiting' && !this.snapshot.players.black) {
+    const sameClientAlreadyPlays = !!session.clientId && ['white', 'black'].some((color) => {
+      const player = this.snapshot.players?.[color];
+      return player?.clientId && player.clientId === session.clientId;
+    });
+
+    if (!sameClientAlreadyPlays && roleCanClaimSeat(session.role) && this.snapshot.status === 'waiting' && !this.snapshot.players.black) {
       session.color = 'black';
       this.snapshot.players.black = {
         token: session.token,
         name: session.name,
         clientType: session.clientType,
+        role: session.role,
+        clientId: session.clientId || '',
         connected: true,
         joinedAt: session.joinedAt,
       };
-      this.snapshot.status = 'active';
-      this.snapshot.startedAt = nowIso();
+      this.startIfReady();
       return;
     }
 
     session.color = 'spectator';
+  }
+
+  startIfReady() {
+    if (this.snapshot.status !== 'waiting') return;
+    if (this.snapshot.players.white?.connected && this.snapshot.players.black?.connected) {
+      this.snapshot.status = 'active';
+      this.snapshot.startedAt = nowIso();
+    }
+  }
+
+  async reserveBridgeSeat(payload) {
+    if (!this.snapshot || !this.snapshot.roomCode || this.snapshot.roomCode === 'UNKNOWN') {
+      return Response.json({ ok: false, error: 'room_not_found' }, { status: 404 });
+    }
+
+    if (['cancelled', 'abandoned', 'finished'].includes(this.snapshot.status)) {
+      return Response.json({ ok: false, error: 'room_closed' }, { status: 409 });
+    }
+
+    if (this.snapshot.status !== 'waiting') {
+      return Response.json({ ok: false, error: 'room_already_active' }, { status: 409 });
+    }
+
+    if (this.snapshot.players.black && this.snapshot.players.black.clientType !== 'bridge') {
+      return Response.json({ ok: false, error: 'black_already_taken' }, { status: 409 });
+    }
+
+    const token = crypto.randomUUID();
+    this.snapshot.players.black = {
+      token,
+      name: sanitizeName(payload.name || 'Physical board'),
+      clientType: 'bridge',
+      role: 'bridge',
+      clientId: sanitizeClientId(payload.clientId),
+      tokenExpiresAt: bridgeTokenExpiresAt(),
+      connected: false,
+      joinedAt: nowIso(),
+    };
+    await this.saveSnapshot();
+    return Response.json({
+      ok: true,
+      roomCode: this.snapshot.roomCode,
+      color: 'black',
+      bridgeJoinToken: token,
+      room: publicSnapshot(this.snapshot),
+    });
   }
 
   async closeSession(socket) {
@@ -853,6 +952,8 @@ export class GameRoom {
       id: session.id,
       name: session.name,
       clientType: session.clientType,
+      role: session.role,
+      clientId: session.clientId || '',
       color: session.color,
       joinedAt: session.joinedAt,
     };
