@@ -151,6 +151,24 @@ function parseUciMove(uci) {
   };
 }
 
+function sanitizeSquareIndex(value) {
+  const square = Number(value);
+  return Number.isInteger(square) && square >= 0 && square <= 63 ? square : null;
+}
+
+function sanitizeSquareName(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return /^[a-h][1-8]$/.test(text) ? text : null;
+}
+
+function sanitizeUciList(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item) => /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(item))
+    .slice(0, 32);
+}
+
 function gameOverInfo(chess, moverColor) {
   if (chess.isCheckmate()) {
     return {
@@ -575,6 +593,14 @@ export class GameRoom {
         // keep this as a no-op so old clients do not see an error toast.
         break;
 
+      case 'physical_lift':
+        await this.broadcastPhysicalLift(session, message);
+        break;
+
+      case 'physical_place':
+        await this.broadcastPhysicalPlace(session, message);
+        break;
+
       case 'move':
       case 'fen':
       case 'board_update':
@@ -646,6 +672,74 @@ export class GameRoom {
     }
 
     return null;
+  }
+
+  ensureBridgePlayer(session) {
+    if (this.snapshot.status !== 'active' && this.snapshot.status !== 'finished') {
+      return 'Room is not active.';
+    }
+
+    if (session.role !== 'bridge' || session.color !== 'white' && session.color !== 'black') {
+      return 'Only a physical-board player can send physical board events.';
+    }
+
+    return null;
+  }
+
+  async broadcastPhysicalLift(session, message) {
+    const playerError = this.ensureBridgePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    const square = sanitizeSquareIndex(message.square);
+    if (square === null) {
+      this.sendToToken(session.token, { type: 'error', message: 'Physical lift needs a square index.' });
+      return;
+    }
+
+    const squareName = sanitizeSquareName(message.square_name || message.squareName) || null;
+    const moves = sanitizeUciList(message.moves);
+    this.broadcast({
+      type: 'physical_lift',
+      from: this.publicSession(session),
+      room: publicSnapshot(this.snapshot),
+      square,
+      square_name: squareName,
+      moves,
+      message: squareName
+        ? `Physical board lifted ${squareName.toUpperCase()}.`
+        : 'Physical board piece lifted.',
+    });
+  }
+
+  async broadcastPhysicalPlace(session, message) {
+    const playerError = this.ensureBridgePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    const square = sanitizeSquareIndex(message.square);
+    if (square === null) {
+      this.sendToToken(session.token, { type: 'error', message: 'Physical place needs a square index.' });
+      return;
+    }
+
+    const squareName = sanitizeSquareName(message.square_name || message.squareName) || null;
+    const clearsSelection = !!(message.clears_selection || message.clearsSelection);
+    this.broadcast({
+      type: 'physical_place',
+      from: this.publicSession(session),
+      room: publicSnapshot(this.snapshot),
+      square,
+      square_name: squareName,
+      clears_selection: clearsSelection,
+      message: clearsSelection
+        ? 'Physical board piece returned.'
+        : 'Physical board piece placed.',
+    });
   }
 
   async applyBoardUpdate(session, message) {

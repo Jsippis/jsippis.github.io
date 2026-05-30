@@ -180,3 +180,9 @@ http://127.0.0.1:5500
 ```
 
 Add more origins in `ALLOWED_ORIGINS` if needed.
+
+## Physical-board room events
+
+Bridge clients can send `physical_lift` and `physical_place` messages while they are a seated physical-board player. The room broadcasts those events to all connected clients so companion browsers can highlight the legal moves that the physical LEDs are showing.
+
+After a game is finished, seated players may use the existing `rematch_offer` / `rematch_accept` flow. The Python bridge maps the physical board reset button to those messages.
