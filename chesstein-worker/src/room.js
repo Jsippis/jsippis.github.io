@@ -29,6 +29,27 @@ function sanitizeVisibility(value) {
   return String(value || '').toLowerCase() === 'public' ? 'public' : 'private';
 }
 
+function sanitizePreviewVisibility(value) {
+  return String(value || '').toLowerCase() === 'public' ? 'public' : 'private';
+}
+
+function sanitizeTimeControl(value = {}) {
+  const base = Number(value.baseSeconds ?? value.base ?? 0);
+  const increment = Number(value.incrementSeconds ?? value.increment ?? 0);
+  const allowedBases = new Set([0, 60, 180, 300, 600]);
+  const allowedIncrements = new Set([0, 1, 2, 5, 10]);
+  const baseSeconds = allowedBases.has(base) ? base : 0;
+  const incrementSeconds = allowedIncrements.has(increment) ? increment : 0;
+  let speed = 'timeless';
+  if (baseSeconds === 60) speed = 'bullet';
+  else if (baseSeconds === 180 || baseSeconds === 300) speed = 'blitz';
+  else if (baseSeconds === 600) speed = 'rapid';
+  const label = baseSeconds > 0
+    ? `${Math.round(baseSeconds / 60)}+${incrementSeconds} ${speed}`
+    : 'Timeless';
+  return { speed, baseSeconds, incrementSeconds, label };
+}
+
 function sanitizeRole(value, clientType = 'gui') {
   const text = String(value || '').toLowerCase();
   if (['player', 'bridge', 'companion', 'spectator'].includes(text)) return text;
@@ -56,6 +77,8 @@ function initialSnapshot(roomCode) {
   return {
     roomCode,
     visibility: 'private',
+    previewVisibility: 'private',
+    timeControl: sanitizeTimeControl(),
     status: 'waiting',
     createdAt: time,
     updatedAt: time,
@@ -88,6 +111,8 @@ function publicRoomSummary(snapshot) {
   return {
     roomCode: snapshot.roomCode,
     visibility: snapshot.visibility,
+    previewVisibility: snapshot.previewVisibility || 'private',
+    timeControl: snapshot.timeControl || sanitizeTimeControl(),
     status: snapshot.status,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
@@ -322,6 +347,8 @@ export class GameRoom {
           ...initialSnapshot(roomCode),
           roomCode,
           visibility: sanitizeVisibility(payload.visibility),
+          previewVisibility: sanitizePreviewVisibility(payload.previewVisibility),
+          timeControl: sanitizeTimeControl(payload.timeControl),
           players: {
             white: {
               token,
@@ -424,6 +451,9 @@ export class GameRoom {
     const role = sanitizeRole(url.searchParams.get('role'), clientType);
     const name = sanitizeName(url.searchParams.get('name'));
     const clientId = sanitizeClientId(url.searchParams.get('clientId'));
+    const viewColor = ['white', 'black'].includes(String(url.searchParams.get('view') || '').toLowerCase())
+      ? String(url.searchParams.get('view')).toLowerCase()
+      : null;
 
     return {
       id: crypto.randomUUID(),
@@ -432,6 +462,7 @@ export class GameRoom {
       clientType,
       role,
       clientId,
+      viewColor,
       color: 'spectator',
       joinedAt: nowIso(),
     };
@@ -601,6 +632,15 @@ export class GameRoom {
         await this.broadcastPhysicalPlace(session, message);
         break;
 
+      case 'piece_lift':
+        await this.broadcastPieceLift(session, message);
+        break;
+
+      case 'piece_place':
+      case 'selection_clear':
+        await this.broadcastPiecePlace(session, message);
+        break;
+
       case 'move':
       case 'fen':
       case 'board_update':
@@ -686,6 +726,24 @@ export class GameRoom {
     return null;
   }
 
+  previewRecipients(session) {
+    const sessions = Array.from(this.sessions.entries());
+    if ((this.snapshot.previewVisibility || 'private') === 'public') return sessions;
+
+    return sessions.filter(([, target]) => {
+      if (target.token && target.token === session.token) return true;
+      if (target.clientId && session.clientId && target.clientId === session.clientId) return true;
+      if (target.role === 'companion' && target.viewColor && target.viewColor === session.color) return true;
+      return false;
+    });
+  }
+
+  broadcastPreviewEvent(session, payload) {
+    for (const [socket] of this.previewRecipients(session)) {
+      this.send(socket, payload);
+    }
+  }
+
   async broadcastPhysicalLift(session, message) {
     const playerError = this.ensureBridgePlayer(session);
     if (playerError) {
@@ -701,13 +759,14 @@ export class GameRoom {
 
     const squareName = sanitizeSquareName(message.square_name || message.squareName) || null;
     const moves = sanitizeUciList(message.moves);
-    this.broadcast({
+    this.broadcastPreviewEvent(session, {
       type: 'physical_lift',
       from: this.publicSession(session),
       room: publicSnapshot(this.snapshot),
       square,
       square_name: squareName,
       moves,
+      previewVisibility: this.snapshot.previewVisibility || 'private',
       message: squareName
         ? `Physical board lifted ${squareName.toUpperCase()}.`
         : 'Physical board piece lifted.',
@@ -729,16 +788,60 @@ export class GameRoom {
 
     const squareName = sanitizeSquareName(message.square_name || message.squareName) || null;
     const clearsSelection = !!(message.clears_selection || message.clearsSelection);
-    this.broadcast({
+    this.broadcastPreviewEvent(session, {
       type: 'physical_place',
       from: this.publicSession(session),
       room: publicSnapshot(this.snapshot),
       square,
       square_name: squareName,
       clears_selection: clearsSelection,
+      previewVisibility: this.snapshot.previewVisibility || 'private',
       message: clearsSelection
         ? 'Physical board piece returned.'
         : 'Physical board piece placed.',
+    });
+  }
+
+  async broadcastPieceLift(session, message) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) {
+      this.sendToToken(session.token, { type: 'error', message: playerError });
+      return;
+    }
+
+    const square = sanitizeSquareIndex(message.square);
+    if (square === null) return;
+
+    const squareName = sanitizeSquareName(message.square_name || message.squareName) || null;
+    const moves = sanitizeUciList(message.moves);
+    this.broadcastPreviewEvent(session, {
+      type: 'piece_lift',
+      from: this.publicSession(session),
+      room: publicSnapshot(this.snapshot),
+      square,
+      square_name: squareName,
+      moves,
+      previewVisibility: this.snapshot.previewVisibility || 'private',
+      message: squareName
+        ? `${session.name || 'Player'} selected ${squareName.toUpperCase()}.`
+        : `${session.name || 'Player'} selected a piece.`,
+    });
+  }
+
+  async broadcastPiecePlace(session, message) {
+    const playerError = this.ensureActivePlayer(session);
+    if (playerError) return;
+
+    const square = sanitizeSquareIndex(message.square);
+    this.broadcastPreviewEvent(session, {
+      type: 'piece_place',
+      from: this.publicSession(session),
+      room: publicSnapshot(this.snapshot),
+      square,
+      square_name: sanitizeSquareName(message.square_name || message.squareName) || null,
+      clears_selection: true,
+      previewVisibility: this.snapshot.previewVisibility || 'private',
+      message: 'Selection cleared.',
     });
   }
 

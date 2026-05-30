@@ -264,7 +264,7 @@
   .waiting-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
 
   .join-row { display: flex; gap: 8px; margin-top: 22px; }
-  .join-row input, .form-card input {
+  .join-row input, .form-card input, .form-card select {
     min-width: 0;
     width: 100%;
     color: var(--text);
@@ -274,7 +274,7 @@
     padding: 12px 13px;
     outline: none;
   }
-  .join-row input:focus, .form-card input:focus, .waiting-card input:focus { border-color: rgba(245,164,0,0.7); }
+  .join-row input:focus, .form-card input:focus, .form-card select:focus, .waiting-card input:focus { border-color: rgba(245,164,0,0.7); }
   .bridge-connect-row { display: flex; gap: 8px; margin-top: 12px; }
   .bridge-connect-row input { min-width: 0; }
   .bridge-command {
@@ -324,6 +324,8 @@
     font-size: 13px;
   }
   .segmented button.active { color: white; background: #4a4b55; }
+  .time-row { display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 8px; }
+  .field-note { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.35; }
 
   .create-btn {
     width: 100%;
@@ -496,6 +498,34 @@
               </div>
             </div>
             <div class="field">
+              <label>Time control</label>
+              <div class="time-row">
+                <select id="time-base">
+                  <option value="0">Timeless</option>
+                  <option value="60">1 min bullet</option>
+                  <option value="180">3 min blitz</option>
+                  <option value="300">5 min blitz</option>
+                  <option value="600">10 min rapid</option>
+                </select>
+                <select id="time-increment">
+                  <option value="0">+0</option>
+                  <option value="1">+1</option>
+                  <option value="2">+2</option>
+                  <option value="5">+5</option>
+                  <option value="10">+10</option>
+                </select>
+              </div>
+              <div class="field-note">No clock is enforced yet; this is stored and shown in the lobby.</div>
+            </div>
+            <div class="field">
+              <label>Move preview visibility</label>
+              <div class="segmented">
+                <button id="preview-private" class="active" onclick="setPreviewVisibility('private')">Private</button>
+                <button id="preview-public" onclick="setPreviewVisibility('public')">Public</button>
+              </div>
+              <div class="field-note">Private keeps lifted-piece highlights on the same-side companion view. Public shows them to everyone.</div>
+            </div>
+            <div class="field">
               <label>Online room backend URL</label>
               <input id="server-url" value="https://chesstein.jospire1.workers.dev" placeholder="https://chesstein.jospire1.workers.dev" />
             </div>
@@ -548,6 +578,7 @@ let waitSocket = null;
 let localBridgeSocket = null;
 let waitingRoom = null;
 let playerDevice = 'gui';
+let previewVisibility = 'private';
 
 function generateRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -603,6 +634,27 @@ function setVisibility(next) {
   document.getElementById('visibility-private').classList.toggle('active', next === 'private');
 }
 
+function setPreviewVisibility(next) {
+  previewVisibility = next === 'public' ? 'public' : 'private';
+  localStorage.setItem('chessteinPreviewVisibility', previewVisibility);
+  document.getElementById('preview-private')?.classList.toggle('active', previewVisibility === 'private');
+  document.getElementById('preview-public')?.classList.toggle('active', previewVisibility === 'public');
+}
+
+function getTimeControl() {
+  const baseSeconds = Number(document.getElementById('time-base')?.value || 0);
+  const incrementSeconds = Number(document.getElementById('time-increment')?.value || 0);
+  return { baseSeconds, incrementSeconds };
+}
+
+function timeLabel(timeControl) {
+  const tc = timeControl || {};
+  const base = Number(tc.baseSeconds || 0);
+  const inc = Number(tc.incrementSeconds || 0);
+  if (!base) return 'Timeless';
+  const speed = base === 60 ? 'bullet' : base === 600 ? 'rapid' : 'blitz';
+  return `${Math.round(base / 60)}+${inc} ${speed}`;
+}
 
 function setPlayerDevice(next) {
   playerDevice = next === 'bridge' ? 'bridge' : 'gui';
@@ -740,7 +792,7 @@ async function createRoom() {
     const response = await fetch(`${server}/api/rooms`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ visibility, name, clientType: 'gui', role: 'player', clientId: getClientId() })
+      body: JSON.stringify({ visibility, name, clientType: 'gui', role: 'player', clientId: getClientId(), previewVisibility, timeControl: getTimeControl() })
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'room_create_failed');
@@ -779,6 +831,8 @@ async function createRoomWithBridge(server, name) {
         clientType: 'bridge',
         role: 'bridge',
         clientId: getClientId(),
+        previewVisibility,
+        timeControl: getTimeControl(),
       })
     });
     const data = await response.json();
@@ -824,10 +878,10 @@ function createPreviewRoom(name) {
   const code = generateRoomCode();
   if (visibility === 'public') {
     const rooms = readPreviewRooms().filter(room => room.code !== code);
-    rooms.unshift({ code, player: name, visibility, createdAt: Date.now() });
+    rooms.unshift({ code, player: name, visibility, timeControl: getTimeControl(), createdAt: Date.now() });
     writePreviewRooms(rooms);
   }
-  waitingRoom = { roomCode: code, visibility, playerToken: 'preview', color: 'white', server: '', wsUrl: '', name };
+  waitingRoom = { roomCode: code, visibility, playerToken: 'preview', color: 'white', server: '', wsUrl: '', name, timeControl: getTimeControl() };
   localStorage.setItem(WAITING_ROOM_KEY, JSON.stringify(waitingRoom));
   renderWaitingRoom();
   renderRooms();
@@ -1077,6 +1131,7 @@ async function refreshRooms() {
       roomCode: room.code,
       player: room.player,
       visibility: room.visibility,
+      timeControl: room.timeControl,
       status: 'waiting'
     })));
     return;
@@ -1106,13 +1161,14 @@ function renderRooms(rooms = []) {
   }
 
   list.innerHTML = `<table class="room-table">
-    <thead><tr><th>Room</th><th>Host</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Room</th><th>Host</th><th>Time</th><th>Status</th><th></th></tr></thead>
     <tbody>${waitingRooms.map(room => {
       const host = room.players?.white?.name || room.player || 'Player';
       const code = room.roomCode || room.code;
       return `<tr>
         <td><span class="room-code">${escapeHtml(code)}</span></td>
         <td>${escapeHtml(host)}</td>
+        <td>${escapeHtml(timeLabel(room.timeControl))}</td>
         <td><span class="tag">waiting</span></td>
         <td><button class="join-btn" onclick="joinRoom('${escapeHtml(code)}')">Join</button></td>
       </tr>`;
@@ -1144,6 +1200,7 @@ function escapeHtml(value) {
     if (globalBridgeInput) globalBridgeInput.value = savedBridge;
   }
   setPlayerDevice(localStorage.getItem('chessteinPlayerDevice') || 'gui');
+  setPreviewVisibility(localStorage.getItem('chessteinPreviewVisibility') === 'public' ? 'public' : 'private');
 
   const params = new URLSearchParams(window.location.search);
   const joinCode = (params.get('join') || '').trim().toUpperCase();

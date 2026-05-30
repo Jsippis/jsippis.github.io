@@ -863,9 +863,13 @@ function handleSquareClick(idx) {
     buildBoard();
     requestLegalMoves(idx);
   } else {
+    const previous = state.selected;
     state.selected = null;
     state.legalMoves = [];
     state.legalMovesPendingFor = null;
+    if (isOnlineGame() && ws && ws.readyState === WebSocket.OPEN && previous !== null) {
+      ws.send(JSON.stringify({ type: 'piece_place', square: previous, square_name: idxToAlg(previous), clears_selection: true }));
+    }
     buildBoard();
   }
 }
@@ -879,6 +883,14 @@ function requestLegalMoves(idx) {
     state.legalMoves = getLocalLegalMoves(idx);
     state.legalMovesPendingFor = null;
     buildBoard();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'piece_lift',
+        square: idx,
+        square_name: idxToAlg(idx),
+        moves: state.legalMoves.map(move => idxToAlg(move.from) + idxToAlg(move.to) + (move.promotion || ''))
+      }));
+    }
     return;
   }
 
@@ -1527,10 +1539,13 @@ function handleMessage(msg) {
     }
 
     case 'physical_lift':
+    case 'piece_lift':
       applyPhysicalLiftMessage(msg);
       break;
 
     case 'physical_place':
+    case 'piece_place':
+    case 'selection_clear':
       applyPhysicalPlaceMessage(msg);
       break;
 
@@ -1586,6 +1601,9 @@ function normalizeFenForGui(fen) {
 
 function applyOnlineRoom(room) {
   if (!room) return;
+  state.selected = null;
+  state.legalMoves = [];
+  state.legalMovesPendingFor = null;
   state.roomStatus = room.status || state.roomStatus;
   state.drawOfferBy = room.drawOfferBy || null;
   state.rematchOfferBy = room.rematchOfferBy || null;
@@ -1856,18 +1874,11 @@ function applyPhysicalPlaceMessage(msg) {
   if (msg.turn) state.turn = msg.turn;
   if (Array.isArray(msg.history)) setHistoryFromSans(msg.history);
 
-  const square = Number(msg.square);
-  const shouldClearSelection = msg.clears_selection || (
-    Number.isInteger(square) && state.selected === square
-  );
-
-  if (shouldClearSelection) {
-    state.selected = null;
-    state.legalMoves = [];
-    state.legalMovesPendingFor = null;
-    buildBoard();
-    setStatus(msg.message || 'Piece returned.');
-  }
+  state.selected = null;
+  state.legalMoves = [];
+  state.legalMovesPendingFor = null;
+  buildBoard();
+  setStatus(msg.message || 'Selection cleared.');
 }
 
 function applyMoveMessage(msg) {

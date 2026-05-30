@@ -119,6 +119,8 @@ export default {
         clientType: body.clientType || 'gui',
         role: body.role || body.clientRole || body.playerRole || (body.clientType === 'bridge' ? 'bridge' : 'player'),
         clientId: String(body.clientId || '').slice(0, 80),
+        previewVisibility: body.previewVisibility || body.preview || 'private',
+        timeControl: body.timeControl || {},
       };
 
       const room = getRoomStub(env, roomCode);
