@@ -150,6 +150,16 @@
   .player-dot.black { background: #2a2420; border-color: var(--muted); }
   .player-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .player-tag { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .player-clock {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-weight: 800;
+    font-size: 18px;
+    min-width: 72px;
+    text-align: right;
+    color: var(--text);
+  }
+  .player-clock.running { color: var(--accent); }
+  .player-clock.low { color: var(--danger); }
   .player-strip.disconnected { border-color: rgba(224, 90, 78, 0.65); color: #f0aaa3; background: rgba(224, 90, 78, 0.10); }
   .player-strip.disconnected .player-tag { color: #f0aaa3; }
 
@@ -539,6 +549,7 @@
         <div>Room<strong id="online-room-code">—</strong></div>
         <div>You<strong id="online-player-color">—</strong></div>
         <div>Status<strong id="online-room-status">—</strong></div>
+        <div>Time<strong id="online-time-control">—</strong></div>
         <div class="opponent-line" id="online-opponent-box">Opponent<strong id="online-opponent">—</strong></div>
       </div>
       <div class="disconnect-banner" id="online-disconnect-banner"><strong>Opponent disconnected.</strong><br>Moves are paused until they reconnect or leave.</div>
@@ -629,6 +640,9 @@ let state = {
   rematchOfferBy: null,
   result: null,
   endReason: null,
+  timeControl: null,
+  clock: null,
+  serverTimeOffsetMs: 0,
   castling: 'KQkq',
   enPassant: '-',
   halfmove: 0,
@@ -637,6 +651,7 @@ let state = {
 
 let ws = null;
 let pendingPromotion = null;
+let clockInterval = null;
 
 const query = new URLSearchParams(window.location.search);
 const launchMode = query.get('mode') || 'bridge';
@@ -1250,6 +1265,44 @@ function isPromotion(piece, to) {
   return (piece[0] === 'w' && rank === 7) || (piece[0] === 'b' && rank === 0);
 }
 
+
+function updateClockTick() {
+  if (!state.clock) return;
+  updatePlayerStrips();
+}
+
+function currentServerNowMs() {
+  return Date.now() + (state.serverTimeOffsetMs || 0);
+}
+
+function clockRemainingFor(color) {
+  const clock = state.clock;
+  if (!clock) return null;
+  let remaining = Number(color === 'white' ? clock.whiteMs : clock.blackMs);
+  if (!Number.isFinite(remaining)) return null;
+  if (clock.runningColor === color && clock.lastTickAt && state.roomStatus === 'active' && !state.gameOver) {
+    const elapsed = Math.max(0, currentServerNowMs() - Date.parse(clock.lastTickAt));
+    remaining -= elapsed;
+  }
+  return Math.max(0, Math.round(remaining));
+}
+
+function formatClock(ms) {
+  if (ms === null || ms === undefined) return '∞';
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function clockClassFor(color) {
+  const remaining = clockRemainingFor(color);
+  const classes = ['player-clock'];
+  if (state.clock?.runningColor === color && state.roomStatus === 'active' && !state.gameOver) classes.push('running');
+  if (remaining !== null && remaining <= 10_000) classes.push('low');
+  return classes.join(' ');
+}
+
 function playerInfo(color) {
   const player = state.players?.[color] || null;
   return {
@@ -1268,7 +1321,9 @@ function renderPlayerStrip(id, color) {
   else if (info.clientType === 'gui') tagParts.push('browser');
   if (isOnlineGame() && !info.connected) tagParts.push('disconnected');
   el.classList.toggle('disconnected', isOnlineGame() && !info.connected);
-  el.innerHTML = `<div class="player-main"><span class="player-dot ${color}"></span><span class="player-name">${escapeHtml(info.name)}</span></div><span class="player-tag">${escapeHtml(tagParts.join(' · '))}</span>`;
+  const clockText = isOnlineGame() ? formatClock(clockRemainingFor(color)) : '';
+  const clockHtml = isOnlineGame() ? `<span class="${clockClassFor(color)}">${clockText}</span>` : '';
+  el.innerHTML = `<div class="player-main"><span class="player-dot ${color}"></span><span class="player-name">${escapeHtml(info.name)}</span></div><span class="player-tag">${escapeHtml(tagParts.join(' · '))}</span>${clockHtml}`;
 }
 
 function updatePlayerStrips() {
@@ -1609,6 +1664,12 @@ function applyOnlineRoom(room) {
   state.rematchOfferBy = room.rematchOfferBy || null;
   state.result = room.result || state.result;
   state.endReason = room.endReason || state.endReason;
+  state.timeControl = room.timeControl || state.timeControl || null;
+  if (Object.prototype.hasOwnProperty.call(room, 'clock')) state.clock = room.clock || null;
+  if (room.serverTime) {
+    const serverMs = Date.parse(room.serverTime);
+    if (Number.isFinite(serverMs)) state.serverTimeOffsetMs = serverMs - Date.now();
+  }
   if (room.players) state.players = room.players;
   maybeAutoFlipForOnline();
   if (room.fen) applyFen(normalizeFenForGui(room.fen));
@@ -1654,6 +1715,8 @@ function updateOnlineMeta(room = {}) {
   document.getElementById('online-room-code').textContent = code;
   document.getElementById('online-player-color').textContent = myLabel;
   document.getElementById('online-room-status').textContent = status;
+  const timeEl = document.getElementById('online-time-control');
+  if (timeEl) timeEl.textContent = (room.timeControl || state.timeControl)?.label || 'Timeless';
   document.getElementById('online-opponent').textContent = opponentText;
 
   const opponentBox = document.getElementById('online-opponent-box');
@@ -1804,6 +1867,8 @@ function formatGameOverText(result, reason) {
   if (reason === 'draw_agreed') return 'Game over: draw agreed.';
   if (reason === 'white_resigned') return 'Game over: Black wins by resignation.';
   if (reason === 'black_resigned') return 'Game over: White wins by resignation.';
+  if (reason === 'white_timeout') return 'Game over: Black wins on time.';
+  if (reason === 'black_timeout') return 'Game over: White wins on time.';
   if (reason === 'white_checkmated') return 'Checkmate: Black wins.';
   if (reason === 'black_checkmated') return 'Checkmate: White wins.';
   if (reason === 'stalemate') return 'Game over: stalemate.';
@@ -1938,6 +2003,7 @@ function applyFen(fen) {
 
 buildBoard();
 applyLaunchParams();
+clockInterval = setInterval(updateClockTick, 500);
 </script>
 
 </body>

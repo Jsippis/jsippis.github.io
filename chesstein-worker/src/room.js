@@ -93,6 +93,7 @@ function initialSnapshot(roomCode) {
     drawOfferBy: null,
     rematchOfferBy: null,
     turn: 'white',
+    clock: null,
   };
 }
 
@@ -128,6 +129,8 @@ function publicRoomSummary(snapshot) {
 function publicSnapshot(snapshot) {
   return {
     ...snapshot,
+    serverTime: nowIso(),
+    clock: cloneClock(snapshot.clock),
     players: {
       white: publicPlayer(snapshot.players?.white),
       black: publicPlayer(snapshot.players?.black),
@@ -218,6 +221,35 @@ function publicDrawOffer(drawOfferBy) {
   return drawOfferBy || null;
 }
 
+function makeInitialClock(timeControl) {
+  const tc = sanitizeTimeControl(timeControl);
+  if (!tc.baseSeconds) return null;
+  return {
+    whiteMs: tc.baseSeconds * 1000,
+    blackMs: tc.baseSeconds * 1000,
+    incrementMs: tc.incrementSeconds * 1000,
+    runningColor: null,
+    lastTickAt: null,
+  };
+}
+
+function cloneClock(clock) {
+  if (!clock) return null;
+  return {
+    whiteMs: Math.max(0, Math.round(Number(clock.whiteMs || 0))),
+    blackMs: Math.max(0, Math.round(Number(clock.blackMs || 0))),
+    incrementMs: Math.max(0, Math.round(Number(clock.incrementMs || 0))),
+    runningColor: clock.runningColor === 'white' || clock.runningColor === 'black' ? clock.runningColor : null,
+    lastTickAt: clock.lastTickAt || null,
+  };
+}
+
+function timeoutResultFor(color) {
+  return color === 'white'
+    ? { result: '0-1', reason: 'white_timeout' }
+    : { result: '1-0', reason: 'black_timeout' };
+}
+
 export class Lobby {
   constructor(state, env) {
     this.state = state;
@@ -277,6 +309,16 @@ export class GameRoom {
 
   async alarm() {
     await this.loadSnapshot();
+
+    if (this.snapshot.status === 'active') {
+      const expired = await this.checkClockTimeout();
+      if (expired) return;
+      if (this.sessions.size > 0) {
+        await this.scheduleClockAlarm();
+        return;
+      }
+    }
+
     if (this.sessions.size > 0) return;
 
     if (this.snapshot.status === 'waiting' || this.snapshot.status === 'active') {
@@ -438,6 +480,7 @@ export class GameRoom {
 
     if (previousStatus !== 'active' && this.snapshot.status === 'active') {
       await this.broadcastGameStarted();
+      await this.scheduleClockAlarm();
     } else {
       this.broadcastPresence();
     }
@@ -521,7 +564,65 @@ export class GameRoom {
     if (this.snapshot.players.white?.connected && this.snapshot.players.black?.connected) {
       this.snapshot.status = 'active';
       this.snapshot.startedAt = nowIso();
+      this.startClock();
     }
+  }
+
+  startClock() {
+    const clock = makeInitialClock(this.snapshot.timeControl);
+    if (!clock) {
+      this.snapshot.clock = null;
+      return;
+    }
+    clock.runningColor = 'white';
+    clock.lastTickAt = nowIso();
+    this.snapshot.clock = clock;
+  }
+
+  tickClock() {
+    const clock = this.snapshot.clock;
+    if (!clock || this.snapshot.status !== 'active') return null;
+    const runningColor = clock.runningColor;
+    if (runningColor !== 'white' && runningColor !== 'black') return null;
+    const now = Date.now();
+    const last = Date.parse(clock.lastTickAt || '') || now;
+    const elapsed = Math.max(0, now - last);
+    if (elapsed > 0) {
+      const key = runningColor === 'white' ? 'whiteMs' : 'blackMs';
+      clock[key] = Math.max(0, Math.round(Number(clock[key] || 0) - elapsed));
+      clock.lastTickAt = new Date(now).toISOString();
+    }
+    return (runningColor === 'white' ? clock.whiteMs : clock.blackMs) <= 0 ? runningColor : null;
+  }
+
+  async checkClockTimeout() {
+    const expiredColor = this.tickClock();
+    if (!expiredColor) return false;
+    const outcome = timeoutResultFor(expiredColor);
+    await this.finishGame({
+      result: outcome.result,
+      reason: outcome.reason,
+      by: expiredColor,
+    });
+    return true;
+  }
+
+  afterMoveClock(moverColor, nextColor) {
+    const clock = this.snapshot.clock;
+    if (!clock) return;
+    const key = moverColor === 'white' ? 'whiteMs' : 'blackMs';
+    clock[key] = Math.max(0, Math.round(Number(clock[key] || 0) + Number(clock.incrementMs || 0)));
+    clock.runningColor = nextColor === 'black' ? 'black' : 'white';
+    clock.lastTickAt = nowIso();
+  }
+
+  async scheduleClockAlarm() {
+    const clock = this.snapshot.clock;
+    if (!clock || this.snapshot.status !== 'active') return;
+    const runningColor = clock.runningColor;
+    if (runningColor !== 'white' && runningColor !== 'black') return;
+    const remaining = runningColor === 'white' ? Number(clock.whiteMs || 0) : Number(clock.blackMs || 0);
+    await this.storage.setAlarm(Date.now() + Math.max(100, remaining + 250));
   }
 
   async reserveBridgeSeat(payload) {
@@ -852,6 +953,8 @@ export class GameRoom {
       return;
     }
 
+    if (await this.checkClockTimeout()) return;
+
     const chess = chessFromFen(this.snapshot.fen);
     const expectedTurn = turnToColor(chess.turn());
     if (expectedTurn !== session.color) {
@@ -880,6 +983,7 @@ export class GameRoom {
     const uci = `${applied.from}${applied.to}${applied.promotion || ''}`;
     this.snapshot.fen = chess.fen();
     this.snapshot.turn = turnToColor(chess.turn());
+    this.afterMoveClock(session.color, this.snapshot.turn);
     this.snapshot.history = [
       ...(this.snapshot.history || []),
       { san: applied.san || uci, uci, by: session.color, at: nowIso() },
@@ -898,6 +1002,8 @@ export class GameRoom {
       move: { uci, san: applied.san || null },
     });
 
+    if (!over) await this.scheduleClockAlarm();
+
     if (over) {
       await this.finishGame({
         result: over.result,
@@ -913,6 +1019,8 @@ export class GameRoom {
       this.sendToToken(session.token, { type: 'error', message: playerError });
       return;
     }
+
+    if (await this.checkClockTimeout()) return;
 
     if (this.snapshot.drawOfferBy === session.color) {
       this.sendToToken(session.token, { type: 'status', message: 'Draw offer already sent.' });
@@ -936,6 +1044,8 @@ export class GameRoom {
       this.sendToToken(session.token, { type: 'error', message: playerError });
       return;
     }
+
+    if (await this.checkClockTimeout()) return;
 
     const offerBy = publicDrawOffer(this.snapshot.drawOfferBy);
     if (!offerBy) {
@@ -962,6 +1072,8 @@ export class GameRoom {
       return;
     }
 
+    if (await this.checkClockTimeout()) return;
+
     const offerBy = publicDrawOffer(this.snapshot.drawOfferBy);
     if (!offerBy) {
       this.sendToToken(session.token, { type: 'error', message: 'There is no draw offer to decline.' });
@@ -975,6 +1087,10 @@ export class GameRoom {
 
     this.snapshot.drawOfferBy = null;
     this.snapshot.rematchOfferBy = null;
+    if (this.snapshot.clock) {
+      this.snapshot.clock.runningColor = null;
+      this.snapshot.clock.lastTickAt = null;
+    }
     await this.saveSnapshot();
     this.broadcast({
       type: 'draw_declined',
@@ -989,6 +1105,8 @@ export class GameRoom {
       this.sendToToken(session.token, { type: 'error', message: playerError });
       return;
     }
+
+    if (await this.checkClockTimeout()) return;
 
     await this.finishGame({
       result: resultForResignation(session.color),
@@ -1077,10 +1195,13 @@ export class GameRoom {
     this.snapshot.drawOfferBy = null;
     this.snapshot.rematchOfferBy = null;
     this.snapshot.turn = 'white';
+    this.startClock();
     this.snapshot.startedAt = time;
     this.snapshot.endedAt = null;
     this.snapshot.updatedAt = time;
     await this.saveSnapshot();
+
+    await this.scheduleClockAlarm();
 
     for (const [socket, session] of this.sessions.entries()) {
       this.send(socket, {
@@ -1099,6 +1220,10 @@ export class GameRoom {
     this.snapshot.endedAt = nowIso();
     this.snapshot.drawOfferBy = null;
     this.snapshot.rematchOfferBy = null;
+    if (this.snapshot.clock) {
+      this.snapshot.clock.runningColor = null;
+      this.snapshot.clock.lastTickAt = null;
+    }
     await this.saveSnapshot();
     await this.removeFromLobby();
 
