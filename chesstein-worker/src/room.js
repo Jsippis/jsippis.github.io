@@ -1,3 +1,5 @@
+import { Chess } from 'chess.js';
+
 const START_FEN = 'startpos';
 const MAX_PUBLIC_ROOMS = 50;
 const EMPTY_ROOM_TTL_MS = 30_000;
@@ -98,6 +100,43 @@ function otherColor(color) {
 
 function resultForResignation(color) {
   return color === 'white' ? '0-1' : '1-0';
+}
+
+function colorToTurn(color) {
+  return color === 'black' ? 'b' : 'w';
+}
+
+function turnToColor(turn) {
+  return turn === 'b' ? 'black' : 'white';
+}
+
+function chessFromFen(fen) {
+  if (!fen || fen === START_FEN || fen === 'startpos') return new Chess();
+  return new Chess(String(fen).trim());
+}
+
+function parseUciMove(uci) {
+  const text = String(uci || '').trim().toLowerCase();
+  if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(text)) return null;
+  return {
+    from: text.slice(0, 2),
+    to: text.slice(2, 4),
+    promotion: text.length > 4 ? text[4] : undefined,
+  };
+}
+
+function gameOverInfo(chess, moverColor) {
+  if (chess.isCheckmate()) {
+    return {
+      result: moverColor === 'white' ? '1-0' : '0-1',
+      reason: `${turnToColor(chess.turn())}_checkmated`,
+    };
+  }
+  if (typeof chess.isStalemate === 'function' && chess.isStalemate()) return { result: '1/2-1/2', reason: 'stalemate' };
+  if (typeof chess.isInsufficientMaterial === 'function' && chess.isInsufficientMaterial()) return { result: '1/2-1/2', reason: 'insufficient_material' };
+  if (typeof chess.isThreefoldRepetition === 'function' && chess.isThreefoldRepetition()) return { result: '1/2-1/2', reason: 'threefold_repetition' };
+  if (typeof chess.isDraw === 'function' && chess.isDraw()) return { result: '1/2-1/2', reason: 'draw' };
+  return null;
 }
 
 function turnColorFromFen(fen) {
@@ -358,7 +397,7 @@ export class GameRoom {
       return;
     }
 
-    if (this.snapshot.status === 'waiting' && !this.snapshot.players.black) {
+    if (session.clientType !== 'spectator' && this.snapshot.status === 'waiting' && !this.snapshot.players.black) {
       session.color = 'black';
       this.snapshot.players.black = {
         token: session.token,
@@ -517,41 +556,59 @@ export class GameRoom {
       return;
     }
 
-    const expectedTurn = this.snapshot.turn || turnColorFromFen(this.snapshot.fen);
-    if (expectedTurn && expectedTurn !== session.color) {
+    const chess = chessFromFen(this.snapshot.fen);
+    const expectedTurn = turnToColor(chess.turn());
+    if (expectedTurn !== session.color) {
       this.sendToToken(session.token, { type: 'error', message: `It is ${expectedTurn}'s turn.` });
       return;
     }
 
-    if (typeof message.fen === 'string' && message.fen.trim()) {
-      this.snapshot.fen = message.fen.trim();
-      this.snapshot.turn = turnColorFromFen(this.snapshot.fen);
-    } else if (message.turn === 'white' || message.turn === 'black') {
-      this.snapshot.turn = message.turn;
-    } else {
-      this.snapshot.turn = otherColor(session.color) || this.snapshot.turn;
+    const parsed = parseUciMove(message.uci);
+    if (!parsed) {
+      this.sendToToken(session.token, { type: 'error', message: 'Move must be a UCI move such as e2e4.' });
+      return;
     }
 
-    if (Array.isArray(message.history)) {
-      this.snapshot.history = message.history.slice(-300);
-    } else if (message.san || message.uci) {
-      this.snapshot.history = [
-        ...(this.snapshot.history || []),
-        { san: message.san || message.uci || null, uci: message.uci || null, by: session.color, at: nowIso() },
-      ].slice(-300);
+    let applied;
+    try {
+      applied = chess.move(parsed);
+    } catch {
+      applied = null;
     }
 
+    if (!applied) {
+      this.sendToToken(session.token, { type: 'move_illegal', uci: message.uci || null });
+      return;
+    }
+
+    const uci = `${applied.from}${applied.to}${applied.promotion || ''}`;
+    this.snapshot.fen = chess.fen();
+    this.snapshot.turn = turnToColor(chess.turn());
+    this.snapshot.history = [
+      ...(this.snapshot.history || []),
+      { san: applied.san || uci, uci, by: session.color, at: nowIso() },
+    ].slice(-300);
     this.snapshot.drawOfferBy = null;
     this.snapshot.rematchOfferBy = null;
+
+    const over = gameOverInfo(chess, session.color);
     await this.saveSnapshot();
 
     this.broadcast({
       type: 'room_update',
-      reason: message.type,
+      reason: 'move',
       from: this.publicSession(session),
       room: publicSnapshot(this.snapshot),
-      move: { uci: message.uci || null, san: message.san || null },
+      move: { uci, san: applied.san || null },
     });
+
+    if (over) {
+      await this.finishGame({
+        result: over.result,
+        reason: over.reason,
+        by: session.color,
+      });
+    }
   }
 
   async offerDraw(session) {

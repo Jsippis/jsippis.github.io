@@ -354,11 +354,33 @@
     transition: transform 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
   }
   .quick-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.22); filter: brightness(1.08); }
+  .quick-card.active { outline: 2px solid var(--accent); box-shadow: 0 0 0 4px rgba(245,164,0,0.15); }
   .quick-card.primary { background: linear-gradient(180deg, #e98200, #d06b00); }
   .quick-card.green { background: linear-gradient(180deg, #1aa956, #128a45); }
   .quick-card .icon { font-size: 28px; }
   .quick-card small { color: rgba(255,255,255,0.72); font-weight: 500; }
 
+  .bridge-status-card {
+    margin-top: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.025);
+    padding: 12px;
+    display: grid;
+    gap: 8px;
+  }
+  .bridge-status-card strong { display: block; font-size: 13px; }
+  .bridge-status-card input {
+    min-width: 0;
+    width: 100%;
+    color: var(--text);
+    background: #131419;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 11px;
+    outline: none;
+  }
+  .bridge-status-card.connected { border-color: rgba(24,185,91,0.45); background: rgba(24,185,91,0.06); }
   .bridge-note {
     margin-top: 16px;
     border-radius: 12px;
@@ -467,6 +489,13 @@
               <input id="player-name" placeholder="Player" maxlength="24" />
             </div>
             <div class="field">
+              <label>Play as</label>
+              <div class="segmented">
+                <button id="device-gui" class="active" onclick="setPlayerDevice('gui')">GUI</button>
+                <button id="device-bridge" onclick="setPlayerDevice('bridge')">Physical Board</button>
+              </div>
+            </div>
+            <div class="field">
               <label>Online room backend URL</label>
               <input id="server-url" value="https://chesstein.jospire1.workers.dev" placeholder="https://chesstein.jospire1.workers.dev" />
             </div>
@@ -487,14 +516,20 @@
             <span>Local Game</span>
             <small>browser-only board</small>
           </a>
-          <a class="quick-card green" href="gui/?mode=bridge">
+          <button class="quick-card green" id="physical-card" onclick="setPlayerDevice('bridge'); connectLocalBridgeGlobal(); return false;">
             <span class="icon">⚡</span>
             <span>Physical Board</span>
-            <small>connect local bridge</small>
-          </a>
+            <small>connect local bridge first</small>
+          </button>
+        </div>
+        <div class="bridge-status-card" id="bridge-status-card">
+          <strong>Physical board bridge</strong>
+          <div class="small" id="bridge-status-text">Not connected. Start the bridge, then connect here.</div>
+          <input id="global-bridge-url" value="ws://localhost:8765" />
+          <button class="secondary-btn" onclick="connectLocalBridgeGlobal()">Connect Bridge</button>
         </div>
         <div class="bridge-note">
-          For the physical board or Stockfish, keep the bridge running locally, then connect from the GUI to <strong>ws://localhost:8765</strong>.
+          If you choose Physical Board, room creation/joining is handed to the local bridge. The browser stays as your companion view.
         </div>
       </aside>
     </section>
@@ -511,6 +546,7 @@ let visibility = 'public';
 let waitSocket = null;
 let localBridgeSocket = null;
 let waitingRoom = null;
+let playerDevice = 'gui';
 
 function generateRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -557,6 +593,105 @@ function setVisibility(next) {
   document.getElementById('visibility-private').classList.toggle('active', next === 'private');
 }
 
+
+function setPlayerDevice(next) {
+  playerDevice = next === 'bridge' ? 'bridge' : 'gui';
+  localStorage.setItem('chessteinPlayerDevice', playerDevice);
+  document.getElementById('device-gui')?.classList.toggle('active', playerDevice === 'gui');
+  document.getElementById('device-bridge')?.classList.toggle('active', playerDevice === 'bridge');
+  document.getElementById('physical-card')?.classList.toggle('active', playerDevice === 'bridge');
+}
+
+function spectatorWsUrl(base, roomCode, name, viewColor = 'white') {
+  const http = new URL(base);
+  http.protocol = http.protocol === 'https:' ? 'wss:' : 'ws:';
+  http.pathname = `/ws/rooms/${encodeURIComponent(roomCode)}`;
+  http.search = '';
+  http.searchParams.set('name', `${name} view`);
+  http.searchParams.set('client', 'spectator');
+  http.searchParams.set('view', viewColor);
+  return http.toString();
+}
+
+function setBridgeStatus(kind, text) {
+  const card = document.getElementById('bridge-status-card');
+  const label = document.getElementById('bridge-status-text');
+  if (card) card.classList.toggle('connected', kind === 'connected');
+  if (label) label.textContent = text;
+}
+
+function getGlobalBridgeUrl() {
+  const input = document.getElementById('global-bridge-url');
+  const value = (input?.value || DEFAULT_LOCAL_BRIDGE_URL).trim();
+  localStorage.setItem('chessteinBridgeUrl', value);
+  return value;
+}
+
+function ensureLocalBridge() {
+  return new Promise((resolve, reject) => {
+    if (localBridgeSocket && localBridgeSocket.readyState === WebSocket.OPEN) {
+      resolve(localBridgeSocket);
+      return;
+    }
+    const url = getGlobalBridgeUrl();
+    try {
+      if (localBridgeSocket) localBridgeSocket.close();
+      localBridgeSocket = new WebSocket(url);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    setBridgeStatus('connecting', 'Connecting to local bridge…');
+    localBridgeSocket.onopen = () => {
+      setBridgeStatus('connected', 'Connected. Physical board can create or join rooms.');
+      resolve(localBridgeSocket);
+    };
+    localBridgeSocket.onerror = () => {
+      setBridgeStatus('error', 'Could not reach local bridge. Start Chesstein Bridge, then retry.');
+      reject(new Error('local_bridge_unreachable'));
+    };
+    localBridgeSocket.onclose = () => {
+      if (localBridgeSocket?.readyState !== WebSocket.OPEN) {
+        setBridgeStatus('offline', 'Local bridge disconnected.');
+      }
+    };
+    localBridgeSocket.onmessage = (event) => {
+      let msg = null;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === 'online_room_status' || msg.type === 'status') {
+        if (msg.message) setBridgeStatus('connected', msg.message);
+      } else if (msg.type === 'error') {
+        showToast(msg.message || 'Local bridge error.');
+      }
+    };
+  });
+}
+
+function bridgeRequest(payload, timeoutMs = 8000) {
+  return ensureLocalBridge().then(socket => new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const timer = setTimeout(() => {
+      socket.removeEventListener('message', onMessage);
+      reject(new Error('local_bridge_timeout'));
+    }, timeoutMs);
+    function onMessage(event) {
+      let msg = null;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.requestId !== requestId) return;
+      clearTimeout(timer);
+      socket.removeEventListener('message', onMessage);
+      if (msg.ok === false || msg.type === 'error') reject(new Error(msg.message || 'local_bridge_error'));
+      else resolve(msg);
+    }
+    socket.addEventListener('message', onMessage);
+    socket.send(JSON.stringify({ ...payload, requestId }));
+  }));
+}
+
+function connectLocalBridgeGlobal() {
+  ensureLocalBridge().then(() => showToast('Local bridge connected.')).catch(() => showToast('Could not reach local bridge.'));
+}
+
 function guiUrl(params) {
   const query = new URLSearchParams(params);
   return `gui/?${query.toString()}`;
@@ -576,6 +711,10 @@ function roomWsUrl(base, roomCode, token, name) {
 async function createRoom() {
   const server = getServerUrl();
   const name = getPlayerName();
+
+  if (playerDevice === 'bridge') {
+    return createRoomWithBridge(server, name);
+  }
 
   if (!server) {
     createPreviewRoom(name);
@@ -609,6 +748,42 @@ async function createRoom() {
   } catch (error) {
     setServerState('error', 'Room server error');
     showToast(`Could not create room: ${error.message}`);
+  }
+}
+
+async function createRoomWithBridge(server, name) {
+  try {
+    setServerState('', 'Asking local bridge to create room…');
+    const response = await bridgeRequest({
+      type: 'create_online_room',
+      visibility,
+      server,
+      name: name || 'Physical board'
+    }, 15000);
+
+    const roomCode = String(response.room || response.roomCode || '').toUpperCase();
+    if (!roomCode) throw new Error('Bridge did not return a room code.');
+
+    waitingRoom = {
+      roomCode,
+      visibility,
+      playerToken: '',
+      color: 'white',
+      server,
+      wsUrl: spectatorWsUrl(server, roomCode, name, 'white'),
+      name,
+      isBridgeHost: true,
+      viewColor: 'white'
+    };
+    localStorage.setItem(WAITING_ROOM_KEY, JSON.stringify(waitingRoom));
+    renderWaitingRoom();
+    connectWaitingSocket();
+    await refreshRooms();
+    setServerState('', 'Physical board room created');
+    showToast(`Physical board created room ${roomCode}.`);
+  } catch (error) {
+    setServerState('error', 'Local bridge error');
+    showToast(`Could not create physical-board room: ${error.message}`);
   }
 }
 
@@ -647,10 +822,14 @@ function connectWaitingSocket() {
     try { msg = JSON.parse(event.data); } catch { return; }
     if (msg.type === 'game_started') {
       const room = msg.room || {};
-      const color = msg.playerColor || waitingRoom.color || 'white';
-      const wsUrl = roomWsUrl(waitingRoom.server, room.roomCode || waitingRoom.roomCode, waitingRoom.playerToken, waitingRoom.name);
+      const code = room.roomCode || waitingRoom.roomCode;
+      const color = waitingRoom.isBridgeHost ? 'spectator' : (msg.playerColor || waitingRoom.color || 'white');
+      const view = waitingRoom.viewColor || (color === 'black' ? 'black' : 'white');
+      const wsUrl = waitingRoom.isBridgeHost
+        ? spectatorWsUrl(waitingRoom.server, code, waitingRoom.name, view)
+        : roomWsUrl(waitingRoom.server, code, waitingRoom.playerToken, waitingRoom.name);
       localStorage.removeItem(WAITING_ROOM_KEY);
-      window.location.href = guiUrl({ mode: 'online', room: room.roomCode || waitingRoom.roomCode, color, token: waitingRoom.playerToken, ws: wsUrl });
+      window.location.href = guiUrl({ mode: 'online', room: code, color, client: waitingRoom.isBridgeHost ? 'spectator' : 'gui', view, token: waitingRoom.playerToken || '', ws: wsUrl });
     } else if (msg.type === 'cancelled' || msg.type === 'room_closed') {
       clearWaitingRoom();
       showToast('Room closed.');
@@ -663,7 +842,9 @@ async function cancelWaitingRoom() {
   const room = waitingRoom;
   clearWaitingRoom(false);
 
-  if (room.server && room.playerToken) {
+  if (room.isBridgeHost) {
+    try { await bridgeRequest({ type: 'disconnect_online_room' }, 3000); } catch {}
+  } else if (room.server && room.playerToken) {
     try {
       await fetch(`${room.server}/api/rooms/${encodeURIComponent(room.roomCode)}?token=${encodeURIComponent(room.playerToken)}`, { method: 'DELETE' });
     } catch {}
@@ -703,16 +884,19 @@ function renderWaitingRoom() {
   }
 
   const visibilityLabel = waitingRoom.visibility === 'public' ? 'Public room' : 'Private room';
-  panel.innerHTML = `<div class="waiting-card">
-    <strong>${visibilityLabel} created</strong>
-    <div>Waiting for an opponent. You are White.</div>
-    <div class="waiting-code">${escapeHtml(waitingRoom.roomCode)}</div>
-    <div class="small">The game starts automatically when a second player joins.</div>
+  const hostText = waitingRoom.isBridgeHost ? 'Physical board is White.' : 'You are White.';
+  const bridgeTools = waitingRoom.isBridgeHost ? '' : `
     <div class="bridge-connect-row">
       <input id="local-bridge-url" value="${escapeHtml(localStorage.getItem('chessteinBridgeUrl') || DEFAULT_LOCAL_BRIDGE_URL)}" />
-      <button class="secondary-btn" onclick="connectLocalBridgeToWaitingRoom()">Connect Physical Board</button>
+      <button class="secondary-btn" onclick="connectLocalBridgeToWaitingRoom()">Use Physical Board as Opponent</button>
     </div>
-    <div class="bridge-command">Bridge not running? Start it, then retry. Terminal fallback: <code>python stockfish_bridge.py --online-room ${escapeHtml(waitingRoom.roomCode)}</code></div>
+    <div class="bridge-command">Bridge not running? Start it, then retry. Terminal fallback: <code>python stockfish_bridge.py --online-room ${escapeHtml(waitingRoom.roomCode)}</code></div>`;
+  panel.innerHTML = `<div class="waiting-card">
+    <strong>${visibilityLabel} created</strong>
+    <div>Waiting for an opponent. ${hostText}</div>
+    <div class="waiting-code">${escapeHtml(waitingRoom.roomCode)}</div>
+    <div class="small">The game starts automatically when a second player joins.</div>
+    ${bridgeTools}
     <div class="waiting-actions">
       <button class="secondary-btn" onclick="copyInviteLink()">Copy Invite Link</button>
       <button class="secondary-btn" onclick="copyBridgeCommand()">Copy Bridge Command</button>
@@ -787,6 +971,10 @@ async function joinRoom(code) {
     return;
   }
 
+  if (playerDevice === 'bridge') {
+    return joinRoomWithBridge(server, cleanCode, name);
+  }
+
   try {
     const token = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const wsUrl = roomWsUrl(server, cleanCode, token, name);
@@ -811,6 +999,23 @@ async function joinRoom(code) {
     };
   } catch (error) {
     showToast(`Could not join: ${error.message}`);
+  }
+}
+
+async function joinRoomWithBridge(server, cleanCode, name) {
+  try {
+    setServerState('', 'Connecting physical board to room…');
+    await bridgeRequest({
+      type: 'connect_online_room',
+      room: cleanCode,
+      server,
+      name: name || 'Physical board'
+    }, 15000);
+    const wsUrl = spectatorWsUrl(server, cleanCode, name, 'black');
+    window.location.href = guiUrl({ mode: 'online', room: cleanCode, color: 'spectator', client: 'spectator', view: 'black', ws: wsUrl });
+  } catch (error) {
+    setServerState('error', 'Local bridge error');
+    showToast(`Could not join with physical board: ${error.message}`);
   }
 }
 
@@ -888,6 +1093,12 @@ function escapeHtml(value) {
   document.getElementById('server-url').value = validSavedServer || DEFAULT_ROOM_SERVER_URL;
   const savedName = localStorage.getItem('chessteinPlayerName');
   if (savedName) document.getElementById('player-name').value = savedName;
+  const savedBridge = localStorage.getItem('chessteinBridgeUrl');
+  if (savedBridge) {
+    const globalBridgeInput = document.getElementById('global-bridge-url');
+    if (globalBridgeInput) globalBridgeInput.value = savedBridge;
+  }
+  setPlayerDevice(localStorage.getItem('chessteinPlayerDevice') || 'gui');
 
   const params = new URLSearchParams(window.location.search);
   const joinCode = (params.get('join') || '').trim().toUpperCase();
