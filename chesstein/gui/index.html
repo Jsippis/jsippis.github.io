@@ -375,6 +375,20 @@
     font-size: 12px;
     margin-top: 2px;
   }
+  .opponent-line.disconnected { color: #f0aaa3 !important; }
+  .opponent-line.disconnected strong { color: #f0aaa3 !important; }
+  .disconnect-banner {
+    display: none;
+    margin-top: 10px;
+    border: 1px solid rgba(224, 90, 78, 0.55);
+    background: rgba(224, 90, 78, 0.10);
+    color: #f0aaa3;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .disconnect-banner.show { display: block; }
   .game-actions {
     display: flex;
     gap: 8px;
@@ -496,10 +510,11 @@
       <div class="card-title">online room</div>
       <div class="online-meta">
         <div>Room<strong id="online-room-code">—</strong></div>
-        <div>You are<strong id="online-player-color">—</strong></div>
+        <div>You<strong id="online-player-color">—</strong></div>
         <div>Status<strong id="online-room-status">—</strong></div>
-        <div>Opponent<strong id="online-opponent">—</strong></div>
+        <div class="opponent-line" id="online-opponent-box">Opponent<strong id="online-opponent">—</strong></div>
       </div>
+      <div class="disconnect-banner" id="online-disconnect-banner"><strong>Opponent disconnected.</strong><br>Moves are paused until they reconnect or leave.</div>
       <div class="game-actions" id="online-actions" style="display:none;">
         <button onclick="offerDraw()">offer draw</button>
         <button class="danger" onclick="resignGame()">resign</button>
@@ -578,9 +593,16 @@ let state = {
   playerColor: null,
   roomStatus: null,
   opponentConnected: false,
+  playerName: null,
+  opponentName: null,
   drawOfferBy: null,
+  rematchOfferBy: null,
   result: null,
-  endReason: null
+  endReason: null,
+  castling: 'KQkq',
+  enPassant: '-',
+  halfmove: 0,
+  fullmove: 1
 };
 
 let ws = null;
@@ -681,8 +703,7 @@ function boardToFen() {
     if (empty) row += String(empty);
     rows.push(row);
   }
-  // Castling/en-passant are not tracked by the browser-only move helper yet.
-  return `${rows.join('/')} ${state.turn} - - 0 1`;
+  return `${rows.join('/')} ${state.turn} ${state.castling || '-'} ${state.enPassant || '-'} ${state.halfmove || 0} ${state.fullmove || 1}`;
 }
 
 function buildBoard() {
@@ -866,27 +887,30 @@ function showPromotion(from, to) {
 }
 
 function applyLocalMove(from, to, promotion) {
-  const piece = state.board[from];
-  const captured = state.board[to];
+  const move = state.legalMoves.find(m => m.from === from && m.to === to && (!!m.promotion === !!promotion || !m.promotion));
+  const result = applyMoveToBoard(state.board, {
+    from,
+    to,
+    promotion,
+    castling: state.castling,
+    enPassant: state.enPassant,
+    halfmove: state.halfmove,
+    fullmove: state.fullmove
+  });
 
-  if (captured) {
-    state.captured[piece[0]].push(captured);
+  if (result.captured) {
+    state.captured[result.piece[0]].push(result.captured);
   }
 
-  state.board[to] = promotion
-    ? piece[0] + promotion.toUpperCase()
-    : piece;
-  state.board[from] = null;
-
-  if (piece[1] === 'K') {
-    const diff = to - from;
-    if (diff === 2) { state.board[from+1] = state.board[from+3]; state.board[from+3] = null; }
-    if (diff === -2) { state.board[from-1] = state.board[from-4]; state.board[from-4] = null; }
-  }
+  state.board = result.board;
+  state.castling = result.castling;
+  state.enPassant = result.enPassant;
+  state.halfmove = result.halfmove;
+  state.fullmove = result.fullmove;
 
   const moveNum = Math.ceil((state.moveHistory.length + 1) / 2);
-  const san = generateSAN(from, to, piece, captured, promotion);
-  state.moveHistory.push({ from, to, san, piece, moveNum });
+  const san = generateSAN(from, to, result.piece, result.captured, promotion);
+  state.moveHistory.push({ from, to, san, piece: result.piece, moveNum });
   state.lastMove = [from, to];
   state.turn = state.turn === 'w' ? 'b' : 'w';
   buildBoard();
@@ -895,26 +919,179 @@ function applyLocalMove(from, to, promotion) {
 function generateSAN(from, to, piece, captured, promotion) {
   let san = '';
   if (piece[1] !== 'P') san += piece[1];
-  if (captured) san += 'x';
+  if (captured) san += piece[1] === 'P' ? idxToAlg(from)[0] + 'x' : 'x';
   san += idxToAlg(to);
   if (promotion) san += '=' + promotion.toUpperCase();
   return san;
 }
 
+function cloneBoard(board) {
+  return board.slice();
+}
+
+function pieceColor(piece) {
+  return piece ? piece[0] : null;
+}
+
+function otherSide(color) {
+  return color === 'w' ? 'b' : 'w';
+}
+
+function onBoard(rank, file) {
+  return rank >= 0 && rank < 8 && file >= 0 && file < 8;
+}
+
+function rankOf(idx) { return Math.floor(idx / 8); }
+function fileOf(idx) { return idx % 8; }
+
+function findKing(board, color) {
+  const target = color + 'K';
+  return board.findIndex(piece => piece === target);
+}
+
+function isSquareAttacked(board, square, byColor) {
+  const rank = rankOf(square);
+  const file = fileOf(square);
+
+  const pawnDir = byColor === 'w' ? 1 : -1;
+  for (const df of [-1, 1]) {
+    const r = rank - pawnDir;
+    const f = file - df;
+    if (onBoard(r, f) && board[r * 8 + f] === byColor + 'P') return true;
+  }
+
+  for (const [dr, df] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+    const r = rank + dr, f = file + df;
+    if (onBoard(r, f) && board[r * 8 + f] === byColor + 'N') return true;
+  }
+
+  for (const [dr, df, sliders] of [
+    [-1,-1, ['B','Q']], [-1,1, ['B','Q']], [1,-1, ['B','Q']], [1,1, ['B','Q']],
+    [-1,0, ['R','Q']], [1,0, ['R','Q']], [0,-1, ['R','Q']], [0,1, ['R','Q']],
+  ]) {
+    let r = rank + dr, f = file + df;
+    while (onBoard(r, f)) {
+      const piece = board[r * 8 + f];
+      if (piece) {
+        if (piece[0] === byColor && sliders.includes(piece[1])) return true;
+        break;
+      }
+      r += dr; f += df;
+    }
+  }
+
+  for (const [dr, df] of [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]) {
+    const r = rank + dr, f = file + df;
+    if (onBoard(r, f) && board[r * 8 + f] === byColor + 'K') return true;
+  }
+
+  return false;
+}
+
+function isKingInCheck(board, color) {
+  const king = findKing(board, color);
+  if (king < 0) return true;
+  return isSquareAttacked(board, king, otherSide(color));
+}
+
+function applyMoveToBoard(board, move) {
+  const next = cloneBoard(board);
+  const piece = next[move.from];
+  const color = piece[0];
+  const type = piece[1];
+  let captured = next[move.to];
+  let castling = move.castling || '-';
+  let enPassant = '-';
+  let halfmove = Number(move.halfmove || 0) + 1;
+  let fullmove = Number(move.fullmove || 1);
+
+  const fromAlg = idxToAlg(move.from);
+  const toAlg = idxToAlg(move.to);
+
+  // En passant capture.
+  if (type === 'P' && toAlg === move.enPassant && !captured && fileOf(move.from) !== fileOf(move.to)) {
+    const capturedIdx = move.to + (color === 'w' ? -8 : 8);
+    captured = next[capturedIdx];
+    next[capturedIdx] = null;
+  }
+
+  next[move.to] = move.promotion ? color + move.promotion.toUpperCase() : piece;
+  next[move.from] = null;
+
+  // Castling rook move.
+  if (type === 'K' && Math.abs(move.to - move.from) === 2) {
+    if (move.to > move.from) {
+      next[move.from + 1] = next[move.from + 3];
+      next[move.from + 3] = null;
+    } else {
+      next[move.from - 1] = next[move.from - 4];
+      next[move.from - 4] = null;
+    }
+  }
+
+  // Castling rights.
+  if (type === 'K') {
+    castling = color === 'w' ? castling.replace(/[KQ]/g, '') : castling.replace(/[kq]/g, '');
+  }
+  if (type === 'R') {
+    if (fromAlg === 'a1') castling = castling.replace('Q', '');
+    if (fromAlg === 'h1') castling = castling.replace('K', '');
+    if (fromAlg === 'a8') castling = castling.replace('q', '');
+    if (fromAlg === 'h8') castling = castling.replace('k', '');
+  }
+  if (captured) {
+    if (toAlg === 'a1') castling = castling.replace('Q', '');
+    if (toAlg === 'h1') castling = castling.replace('K', '');
+    if (toAlg === 'a8') castling = castling.replace('q', '');
+    if (toAlg === 'h8') castling = castling.replace('k', '');
+  }
+  if (!castling) castling = '-';
+
+  if (type === 'P') {
+    halfmove = 0;
+    if (Math.abs(move.to - move.from) === 16) {
+      enPassant = idxToAlg((move.from + move.to) / 2);
+    }
+  } else if (captured) {
+    halfmove = 0;
+  }
+
+  if (color === 'b') fullmove += 1;
+
+  return { board: next, piece, captured, castling, enPassant, halfmove, fullmove };
+}
+
 function getLocalLegalMoves(idx) {
+  const pseudo = getPseudoLegalMoves(idx);
+  const piece = state.board[idx];
+  if (!piece) return [];
+  return pseudo.filter(move => {
+    const result = applyMoveToBoard(state.board, {
+      ...move,
+      castling: state.castling,
+      enPassant: state.enPassant,
+      halfmove: state.halfmove,
+      fullmove: state.fullmove
+    });
+    return !isKingInCheck(result.board, piece[0]);
+  });
+}
+
+function getPseudoLegalMoves(idx) {
   const moves = [];
   const piece = state.board[idx];
   if (!piece) return moves;
 
   const type = piece[1];
   const color = piece[0];
-  const rank = Math.floor(idx / 8);
-  const file = idx % 8;
+  const rank = rankOf(idx);
+  const file = fileOf(idx);
 
   function tryAdd(to) {
     if (to < 0 || to > 63) return false;
     const target = state.board[to];
     if (target && target[0] === color) return false;
+    if (target && target[1] === 'K') return false;
     const isCapture = !!target;
     moves.push({ from: idx, to, promotion: isPromotion(piece, to) });
     return !isCapture;
@@ -922,7 +1099,7 @@ function getLocalLegalMoves(idx) {
 
   function slide(dr, df) {
     let r = rank + dr, f = file + df;
-    while (r >= 0 && r < 8 && f >= 0 && f < 8) {
+    while (onBoard(r, f)) {
       const to = r * 8 + f;
       if (!tryAdd(to)) break;
       r += dr; f += df;
@@ -937,23 +1114,26 @@ function getLocalLegalMoves(idx) {
       moves.push({ from: idx, to: fwd, promotion: isPromotion(piece, fwd) });
       if (rank === startRank) {
         const fwd2 = fwd + dir * 8;
-        if (!state.board[fwd2]) moves.push({ from: idx, to: fwd2, promotion: false });
+        if (fwd2 >= 0 && fwd2 < 64 && !state.board[fwd2]) moves.push({ from: idx, to: fwd2, promotion: false });
       }
     }
-    [[dir, -1],[dir, 1]].forEach(([dr, df]) => {
-      const tf = file + df;
-      if (tf < 0 || tf > 7) return;
-      const to = (rank + dr) * 8 + tf;
-      if (state.board[to] && state.board[to][0] !== color) {
+    for (const df of [-1, 1]) {
+      const r = rank + dir;
+      const f = file + df;
+      if (!onBoard(r, f)) continue;
+      const to = r * 8 + f;
+      const target = state.board[to];
+      const epCapture = idxToAlg(to) === state.enPassant;
+      if (((target && target[0] !== color && target[1] !== 'K') || epCapture)) {
         moves.push({ from: idx, to, promotion: isPromotion(piece, to) });
       }
-    });
+    }
   }
 
   if (type === 'N') {
     [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(([dr,df]) => {
       const r = rank+dr, f = file+df;
-      if (r>=0&&r<8&&f>=0&&f<8) tryAdd(r*8+f);
+      if (onBoard(r, f)) tryAdd(r*8+f);
     });
   }
 
@@ -968,15 +1148,27 @@ function getLocalLegalMoves(idx) {
   if (type === 'K') {
     [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]].forEach(([dr,df]) => {
       const r = rank+dr, f = file+df;
-      if (r>=0&&r<8&&f>=0&&f<8) tryAdd(r*8+f);
+      if (onBoard(r, f)) tryAdd(r*8+f);
     });
-    if (color === 'w' && idx === 4) {
-      if (!state.board[5]&&!state.board[6]&&state.board[7]==='wR') moves.push({from:4,to:6,promotion:false});
-      if (!state.board[3]&&!state.board[2]&&!state.board[1]&&state.board[0]==='wR') moves.push({from:4,to:2,promotion:false});
-    }
-    if (color === 'b' && idx === 60) {
-      if (!state.board[61]&&!state.board[62]&&state.board[63]==='bR') moves.push({from:60,to:62,promotion:false});
-      if (!state.board[59]&&!state.board[58]&&!state.board[57]&&state.board[56]==='bR') moves.push({from:60,to:58,promotion:false});
+
+    const enemy = otherSide(color);
+    if (!isKingInCheck(state.board, color)) {
+      if (color === 'w' && idx === 4) {
+        if ((state.castling || '').includes('K') && !state.board[5] && !state.board[6] && state.board[7] === 'wR' && !isSquareAttacked(state.board, 5, enemy) && !isSquareAttacked(state.board, 6, enemy)) {
+          moves.push({ from: 4, to: 6, promotion: false });
+        }
+        if ((state.castling || '').includes('Q') && !state.board[3] && !state.board[2] && !state.board[1] && state.board[0] === 'wR' && !isSquareAttacked(state.board, 3, enemy) && !isSquareAttacked(state.board, 2, enemy)) {
+          moves.push({ from: 4, to: 2, promotion: false });
+        }
+      }
+      if (color === 'b' && idx === 60) {
+        if ((state.castling || '').includes('k') && !state.board[61] && !state.board[62] && state.board[63] === 'bR' && !isSquareAttacked(state.board, 61, enemy) && !isSquareAttacked(state.board, 62, enemy)) {
+          moves.push({ from: 60, to: 62, promotion: false });
+        }
+        if ((state.castling || '').includes('q') && !state.board[59] && !state.board[58] && !state.board[57] && state.board[56] === 'bR' && !isSquareAttacked(state.board, 59, enemy) && !isSquareAttacked(state.board, 58, enemy)) {
+          moves.push({ from: 60, to: 58, promotion: false });
+        }
+      }
     }
   }
 
@@ -1065,6 +1257,10 @@ function resetLocalState(statusText = 'New game started.') {
   state.captured = { w: [], b: [] };
   state.gameOver = false;
   state.fen = START_FEN;
+  state.castling = 'KQkq';
+  state.enPassant = '-';
+  state.halfmove = 0;
+  state.fullmove = 1;
   buildBoard();
   setStatus(statusText);
 }
@@ -1187,6 +1383,27 @@ function handleMessage(msg) {
       setStatus(formatGameOverText(state.result, state.endReason), true);
       break;
 
+    case 'rematch_offer':
+      if (msg.room) applyOnlineRoom(msg.room);
+      setStatus(msg.offeredBy === state.playerColor ? 'Rematch requested.' : 'Opponent requested a rematch.');
+      break;
+
+    case 'rematch_declined':
+      if (msg.room) applyOnlineRoom(msg.room);
+      setStatus('Rematch declined.');
+      break;
+
+    case 'rematch_started':
+      if (msg.playerColor) state.playerColor = msg.playerColor;
+      resetLocalState('Rematch started.');
+      if (msg.room) applyOnlineRoom(msg.room);
+      state.gameOver = false;
+      state.result = null;
+      state.endReason = null;
+      state.rematchOfferBy = null;
+      setStatus('Rematch started.');
+      break;
+
     case 'cancelled':
     case 'room_closed':
       state.gameOver = true;
@@ -1284,6 +1501,7 @@ function applyOnlineRoom(room) {
   if (!room) return;
   state.roomStatus = room.status || state.roomStatus;
   state.drawOfferBy = room.drawOfferBy || null;
+  state.rematchOfferBy = room.rematchOfferBy || null;
   state.result = room.result || state.result;
   state.endReason = room.endReason || state.endReason;
   if (room.fen) applyFen(normalizeFenForGui(room.fen));
@@ -1299,7 +1517,10 @@ function applyOnlinePresence(room) {
   const myColor = state.playerColor;
   const otherColor = myColor === 'white' ? 'black' : myColor === 'black' ? 'white' : null;
   const opponent = otherColor ? room.players?.[otherColor] : null;
+  const mine = myColor === 'white' || myColor === 'black' ? room.players?.[myColor] : null;
   state.opponentConnected = !!opponent?.connected;
+  state.playerName = mine?.name || state.playerName || null;
+  state.opponentName = opponent?.name || state.opponentName || null;
   state.roomStatus = room.status || state.roomStatus;
   updateOnlineMeta(room);
 }
@@ -1310,17 +1531,37 @@ function updateOnlineMeta(room = {}) {
   const code = room.roomCode || launchRoom || '—';
   const color = state.playerColor || launchColor || '—';
   const status = room.status || state.roomStatus || '—';
-  const opponentText = state.opponentConnected ? 'connected' : status === 'waiting' ? 'waiting' : 'disconnected';
+  const otherColorLabel = color === 'white' ? 'Black' : color === 'black' ? 'White' : 'Opponent';
+  const myLabel = color === 'white' || color === 'black'
+    ? `${capitalize(color)}${state.playerName ? ' · ' + state.playerName : ''}`
+    : '—';
+  const opponentText = state.opponentConnected
+    ? `${otherColorLabel}${state.opponentName ? ' · ' + state.opponentName : ''} · connected`
+    : status === 'waiting'
+      ? `${otherColorLabel} · waiting`
+      : `${otherColorLabel}${state.opponentName ? ' · ' + state.opponentName : ''} · disconnected`;
+
   document.getElementById('online-room-code').textContent = code;
-  document.getElementById('online-player-color').textContent = color;
+  document.getElementById('online-player-color').textContent = myLabel;
   document.getElementById('online-room-status').textContent = status;
   document.getElementById('online-opponent').textContent = opponentText;
+
+  const opponentBox = document.getElementById('online-opponent-box');
+  const disconnectBanner = document.getElementById('online-disconnect-banner');
+  const disconnectedDuringGame = status === 'active' && !state.gameOver && !state.opponentConnected;
+  if (opponentBox) opponentBox.classList.toggle('disconnected', disconnectedDuringGame);
+  if (disconnectBanner) disconnectBanner.classList.toggle('show', disconnectedDuringGame);
 
   const actions = document.getElementById('online-actions');
   if (actions) actions.style.display = status === 'active' && !state.gameOver ? '' : 'none';
 
   renderDrawOfferPanel();
   renderOnlineGameOverPanel();
+}
+
+function capitalize(value) {
+  const text = String(value || '');
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
 function sendOnlineMessage(payload) {
@@ -1367,6 +1608,28 @@ function resignGame() {
   }
 }
 
+function requestRematch() {
+  if (!state.gameOver) {
+    setStatus('Rematch is available after the game ends.');
+    return;
+  }
+  if (sendOnlineMessage({ type: 'rematch_offer' })) {
+    setStatus('Rematch requested. Waiting for opponent.');
+  }
+}
+
+function acceptRematch() {
+  if (sendOnlineMessage({ type: 'rematch_accept' })) {
+    setStatus('Accepting rematch...');
+  }
+}
+
+function declineRematch() {
+  if (sendOnlineMessage({ type: 'rematch_decline' })) {
+    setStatus('Rematch declined.');
+  }
+}
+
 function backToLobby() {
   window.location.href = '../';
 }
@@ -1405,11 +1668,26 @@ function renderOnlineGameOverPanel() {
     return;
   }
 
-  panel.innerHTML = `<strong>${escapeHtml(formatGameOverText(state.result, state.endReason))}</strong>
-    <div class="muted">This room is finished. Rematch flow comes later.</div>
-    <div class="mini-actions">
+  const offerBy = state.rematchOfferBy;
+  let rematchHtml = '';
+  if (offerBy && offerBy === state.playerColor) {
+    rematchHtml = `<div class="muted">Rematch requested. Waiting for your opponent to accept.</div>`;
+  } else if (offerBy && offerBy !== state.playerColor) {
+    rematchHtml = `<div class="muted">Your opponent wants a rematch.</div>
+      <div class="mini-actions">
+        <button onclick="acceptRematch()">accept rematch</button>
+        <button onclick="declineRematch()">decline</button>
+      </div>`;
+  } else {
+    rematchHtml = `<div class="mini-actions">
+      <button onclick="requestRematch()">rematch</button>
       <button onclick="backToLobby()">back to lobby</button>
     </div>`;
+  }
+
+  panel.innerHTML = `<strong>${escapeHtml(formatGameOverText(state.result, state.endReason))}</strong>
+    ${rematchHtml}
+    ${offerBy ? '<div class="mini-actions"><button onclick="backToLobby()">back to lobby</button></div>' : ''}`;
 }
 
 function formatGameOverText(result, reason) {
@@ -1539,15 +1817,20 @@ function applyServerState(msg, options = {}) {
 }
 
 function applyFen(fen) {
-  state.board = fenToBoard(fen);
-  const parts = fen.split(' ');
+  const normalized = normalizeFenForGui(fen);
+  state.board = fenToBoard(normalized);
+  const parts = normalized.split(' ');
   if (parts[1]) state.turn = parts[1];
-  state.fen = fen;
-  state.captured = computeCapturedFromBoard();
+  state.castling = parts[2] && parts[2] !== '-' ? parts[2] : '-';
+  state.enPassant = parts[3] || '-';
+  state.halfmove = Number(parts[4] || 0);
+  state.fullmove = Number(parts[5] || 1);
+  state.fen = normalized;
 }
 
 buildBoard();
 applyLaunchParams();
 </script>
+
 </body>
 </html>

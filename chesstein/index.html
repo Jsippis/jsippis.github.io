@@ -274,7 +274,22 @@
     padding: 12px 13px;
     outline: none;
   }
-  .join-row input:focus, .form-card input:focus { border-color: rgba(245,164,0,0.7); }
+  .join-row input:focus, .form-card input:focus, .waiting-card input:focus { border-color: rgba(245,164,0,0.7); }
+  .bridge-connect-row { display: flex; gap: 8px; margin-top: 12px; }
+  .bridge-connect-row input { min-width: 0; }
+  .bridge-command {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .bridge-command code {
+    color: var(--text);
+    background: rgba(0,0,0,0.24);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
 
   .form-card {
     background: rgba(255,255,255,0.025);
@@ -491,8 +506,10 @@
 const PUBLIC_ROOMS_KEY = 'chessteinPublicRoomsPreview';
 const WAITING_ROOM_KEY = 'chessteinWaitingRoom';
 const DEFAULT_ROOM_SERVER_URL = 'https://chesstein.jospire1.workers.dev';
+const DEFAULT_LOCAL_BRIDGE_URL = 'ws://localhost:8765';
 let visibility = 'public';
 let waitSocket = null;
+let localBridgeSocket = null;
 let waitingRoom = null;
 
 function generateRoomCode() {
@@ -691,11 +708,72 @@ function renderWaitingRoom() {
     <div>Waiting for an opponent. You are White.</div>
     <div class="waiting-code">${escapeHtml(waitingRoom.roomCode)}</div>
     <div class="small">The game starts automatically when a second player joins.</div>
+    <div class="bridge-connect-row">
+      <input id="local-bridge-url" value="${escapeHtml(localStorage.getItem('chessteinBridgeUrl') || DEFAULT_LOCAL_BRIDGE_URL)}" />
+      <button class="secondary-btn" onclick="connectLocalBridgeToWaitingRoom()">Connect Physical Board</button>
+    </div>
+    <div class="bridge-command">Bridge not running? Start it, then retry. Terminal fallback: <code>python stockfish_bridge.py --online-room ${escapeHtml(waitingRoom.roomCode)}</code></div>
     <div class="waiting-actions">
       <button class="secondary-btn" onclick="copyInviteLink()">Copy Invite Link</button>
+      <button class="secondary-btn" onclick="copyBridgeCommand()">Copy Bridge Command</button>
       <button class="danger-btn" onclick="cancelWaitingRoom()">Cancel Room</button>
     </div>
   </div>`;
+}
+
+function getLocalBridgeUrl() {
+  const input = document.getElementById('local-bridge-url');
+  const value = (input?.value || DEFAULT_LOCAL_BRIDGE_URL).trim();
+  localStorage.setItem('chessteinBridgeUrl', value);
+  return value;
+}
+
+function copyBridgeCommand() {
+  if (!waitingRoom) return;
+  const command = `python stockfish_bridge.py --online-room ${waitingRoom.roomCode}`;
+  navigator.clipboard?.writeText(command);
+  showToast('Bridge command copied.');
+}
+
+function connectLocalBridgeToWaitingRoom() {
+  if (!waitingRoom) return;
+  if (!waitingRoom.server) {
+    showToast('Real room server required before connecting a physical board.');
+    return;
+  }
+
+  const url = getLocalBridgeUrl();
+  try {
+    if (localBridgeSocket) localBridgeSocket.close();
+    localBridgeSocket = new WebSocket(url);
+  } catch {
+    showToast('Invalid local bridge URL.');
+    return;
+  }
+
+  setServerState('', 'Connecting local bridge…');
+  localBridgeSocket.onopen = () => {
+    localBridgeSocket.send(JSON.stringify({
+      type: 'connect_online_room',
+      room: waitingRoom.roomCode,
+      server: waitingRoom.server,
+      name: 'Physical board'
+    }));
+    showToast('Room code sent to local bridge.');
+  };
+  localBridgeSocket.onerror = () => {
+    setServerState('error', 'Local bridge not detected');
+    showToast('Could not reach local bridge. Start Chesstein Bridge, then retry.');
+  };
+  localBridgeSocket.onmessage = (event) => {
+    let msg = null;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg.type === 'online_room_status' || msg.type === 'status') {
+      showToast(msg.message || 'Local bridge updated.');
+    } else if (msg.type === 'error') {
+      showToast(msg.message || 'Local bridge error.');
+    }
+  };
 }
 
 async function joinRoom(code) {

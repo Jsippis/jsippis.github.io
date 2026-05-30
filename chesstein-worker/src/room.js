@@ -47,6 +47,7 @@ function initialSnapshot(roomCode) {
     result: null,
     endReason: null,
     drawOfferBy: null,
+    rematchOfferBy: null,
     turn: 'white',
   };
 }
@@ -459,6 +460,18 @@ export class GameRoom {
         await this.resign(session);
         break;
 
+      case 'rematch_offer':
+        await this.offerRematch(session);
+        break;
+
+      case 'rematch_accept':
+        await this.acceptRematch(session);
+        break;
+
+      case 'rematch_decline':
+        await this.declineRematch(session);
+        break;
+
       case 'leave_room':
         try { socket.close(1000, 'client_left'); } catch {}
         break;
@@ -529,6 +542,7 @@ export class GameRoom {
     }
 
     this.snapshot.drawOfferBy = null;
+    this.snapshot.rematchOfferBy = null;
     await this.saveSnapshot();
 
     this.broadcast({
@@ -607,6 +621,7 @@ export class GameRoom {
     }
 
     this.snapshot.drawOfferBy = null;
+    this.snapshot.rematchOfferBy = null;
     await this.saveSnapshot();
     this.broadcast({
       type: 'draw_declined',
@@ -629,12 +644,108 @@ export class GameRoom {
     });
   }
 
+  async offerRematch(session) {
+    if (this.snapshot.status !== 'finished') {
+      this.sendToToken(session.token, { type: 'error', message: 'Rematch is only available after the game ends.' });
+      return;
+    }
+
+    if (session.color !== 'white' && session.color !== 'black') {
+      this.sendToToken(session.token, { type: 'error', message: 'Spectators cannot request a rematch.' });
+      return;
+    }
+
+    this.snapshot.rematchOfferBy = session.color;
+    await this.saveSnapshot();
+    this.broadcast({
+      type: 'rematch_offer',
+      offeredBy: session.color,
+      from: this.publicSession(session),
+      room: publicSnapshot(this.snapshot),
+    });
+  }
+
+  async acceptRematch(session) {
+    if (this.snapshot.status !== 'finished') {
+      this.sendToToken(session.token, { type: 'error', message: 'This game is not finished yet.' });
+      return;
+    }
+
+    if (session.color !== 'white' && session.color !== 'black') {
+      this.sendToToken(session.token, { type: 'error', message: 'Spectators cannot accept a rematch.' });
+      return;
+    }
+
+    if (!this.snapshot.rematchOfferBy) {
+      this.sendToToken(session.token, { type: 'error', message: 'There is no rematch offer to accept.' });
+      return;
+    }
+
+    if (this.snapshot.rematchOfferBy === session.color) {
+      this.sendToToken(session.token, { type: 'error', message: 'You cannot accept your own rematch offer.' });
+      return;
+    }
+
+    await this.startRematch();
+  }
+
+  async declineRematch(session) {
+    if (this.snapshot.status !== 'finished') {
+      this.sendToToken(session.token, { type: 'error', message: 'This game is not finished yet.' });
+      return;
+    }
+
+    if (!this.snapshot.rematchOfferBy) {
+      this.sendToToken(session.token, { type: 'error', message: 'There is no rematch offer to decline.' });
+      return;
+    }
+
+    if (this.snapshot.rematchOfferBy === session.color) {
+      this.sendToToken(session.token, { type: 'error', message: 'You cannot decline your own rematch offer.' });
+      return;
+    }
+
+    this.snapshot.rematchOfferBy = null;
+    await this.saveSnapshot();
+    this.broadcast({
+      type: 'rematch_declined',
+      declinedBy: session.color,
+      room: publicSnapshot(this.snapshot),
+    });
+  }
+
+  async startRematch() {
+    const time = nowIso();
+    this.snapshot.status = 'active';
+    this.snapshot.fen = START_FEN;
+    this.snapshot.history = [];
+    this.snapshot.result = null;
+    this.snapshot.endReason = null;
+    this.snapshot.drawOfferBy = null;
+    this.snapshot.rematchOfferBy = null;
+    this.snapshot.turn = 'white';
+    this.snapshot.startedAt = time;
+    this.snapshot.endedAt = null;
+    this.snapshot.updatedAt = time;
+    await this.saveSnapshot();
+
+    for (const [socket, session] of this.sessions.entries()) {
+      this.send(socket, {
+        type: 'rematch_started',
+        playerColor: session.color,
+        session: this.publicSession(session),
+        room: publicSnapshot(this.snapshot),
+      });
+    }
+  }
+
   async finishGame({ result, reason, by }) {
     this.snapshot.status = 'finished';
     this.snapshot.result = result || null;
     this.snapshot.endReason = reason || 'game_finished';
     this.snapshot.endedAt = nowIso();
     this.snapshot.drawOfferBy = null;
+    this.snapshot.rematchOfferBy = null;
     await this.saveSnapshot();
     await this.removeFromLobby();
 
