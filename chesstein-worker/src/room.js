@@ -4,6 +4,7 @@ const START_FEN = 'startpos';
 const MAX_PUBLIC_ROOMS = 50;
 const EMPTY_ROOM_TTL_MS = 30_000;
 const FINISHED_ROOM_TTL_MS = 5 * 60_000;
+const PUBLIC_WAITING_ROOM_TTL_MS = 30 * 60_000;
 const BRIDGE_TOKEN_TTL_MS = 5 * 60_000;
 
 function nowIso() {
@@ -124,6 +125,20 @@ function publicRoomSummary(snapshot) {
     },
     spectators: snapshot.spectators || 0,
   };
+}
+
+
+function publicRoomIsFresh(room) {
+  if (!room || room.visibility !== 'public' || room.status !== 'waiting') return false;
+  const stamp = Date.parse(room.updatedAt || room.createdAt || '');
+  if (!Number.isFinite(stamp)) return true;
+  return Date.now() - stamp <= PUBLIC_WAITING_ROOM_TTL_MS;
+}
+
+function prunePublicRooms(rooms) {
+  return (Array.isArray(rooms) ? rooms : [])
+    .filter(publicRoomIsFresh)
+    .slice(0, MAX_PUBLIC_ROOMS);
 }
 
 function publicSnapshot(snapshot) {
@@ -262,16 +277,17 @@ export class Lobby {
 
     if (request.method === 'GET' && url.pathname === '/list') {
       const rooms = await this.storage.get('publicRooms') || [];
-      const visibleRooms = rooms
-        .filter((room) => room.visibility === 'public' && room.status === 'waiting')
-        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-        .slice(0, MAX_PUBLIC_ROOMS);
+      const visibleRooms = prunePublicRooms(rooms)
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+      if (visibleRooms.length !== rooms.length) {
+        await this.storage.put('publicRooms', visibleRooms);
+      }
       return Response.json({ ok: true, rooms: visibleRooms });
     }
 
     if ((request.method === 'POST' || request.method === 'PATCH') && url.pathname === '/rooms') {
       const payload = await request.json();
-      const existing = await this.storage.get('publicRooms') || [];
+      const existing = prunePublicRooms(await this.storage.get('publicRooms') || []);
 
       if (payload.visibility !== 'public' || payload.status !== 'waiting') {
         const rooms = existing.filter((room) => room.roomCode !== payload.roomCode);
@@ -307,8 +323,16 @@ export class GameRoom {
     this.snapshot = null;
   }
 
+  async expireRoomStorage() {
+    await this.removeFromLobby();
+    await this.storage.delete('snapshot');
+    this.snapshot = null;
+  }
+
   async alarm() {
     await this.loadSnapshot();
+
+    if (!this.snapshot) return;
 
     if (this.snapshot.status === 'active') {
       const expired = await this.checkClockTimeout();
@@ -329,12 +353,12 @@ export class GameRoom {
       this.snapshot.players.white = null;
       this.snapshot.players.black = null;
       await this.storage.put('snapshot', this.snapshot);
-      await this.removeFromLobby();
+      await this.expireRoomStorage();
       return;
     }
 
-    if (this.snapshot.status === 'finished') {
-      await this.removeFromLobby();
+    if (['finished', 'cancelled', 'abandoned'].includes(this.snapshot.status)) {
+      await this.expireRoomStorage();
     }
   }
 
@@ -413,9 +437,10 @@ export class GameRoom {
     }
 
     if (request.method === 'GET' && url.pathname === '/snapshot') {
-      const roomCode = normalizeRoomCode(url.searchParams.get('roomCode')) || 'UNKNOWN';
-      const snapshot = await this.loadSnapshot(roomCode);
-      return Response.json({ ok: true, room: publicSnapshot(snapshot) });
+      const existing = await this.storage.get('snapshot');
+      if (!existing) return Response.json({ ok: false, error: 'room_not_found' }, { status: 404 });
+      this.snapshot = existing;
+      return Response.json({ ok: true, room: publicSnapshot(this.snapshot) });
     }
 
     if (request.method === 'DELETE' && url.pathname === '/cancel') {
@@ -430,7 +455,9 @@ export class GameRoom {
 
     if (request.method === 'POST' && url.pathname === '/bridge-token') {
       const payload = await request.json().catch(() => ({}));
-      await this.loadSnapshot(normalizeRoomCode(url.searchParams.get('roomCode')) || 'UNKNOWN');
+      const existing = await this.storage.get('snapshot');
+      if (!existing) return Response.json({ ok: false, error: 'room_not_found' }, { status: 404 });
+      this.snapshot = existing;
       return this.reserveBridgeSeat(payload);
     }
 
@@ -444,7 +471,9 @@ export class GameRoom {
   async handleWebSocket(request) {
     const url = new URL(request.url);
     const roomCode = normalizeRoomCode(url.pathname.split('/').pop());
-    await this.loadSnapshot(roomCode);
+    const existing = await this.storage.get('snapshot');
+    if (!existing) return new Response('Room not found.', { status: 404 });
+    this.snapshot = existing;
 
     if (['cancelled', 'abandoned', 'finished'].includes(this.snapshot.status)) {
       return new Response('Room is closed.', { status: 409 });
@@ -1244,6 +1273,7 @@ export class GameRoom {
     await this.saveSnapshot();
     await this.removeFromLobby();
     this.broadcast({ type: 'cancelled', room: publicSnapshot(this.snapshot) });
+    await this.storage.setAlarm(Date.now() + EMPTY_ROOM_TTL_MS);
     for (const socket of this.sessions.keys()) {
       try { socket.close(1000, 'room_cancelled'); } catch {}
     }

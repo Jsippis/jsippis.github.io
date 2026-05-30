@@ -431,19 +431,11 @@
   <main class="page">
     <nav class="topbar">
       <div class="brand"><div class="brand-mark">♞</div><span class="brand-word"><span class="brand-white">Ches</span><span class="brand-accent">stein</span></span></div>
-      <div class="top-actions">
-        <a class="pill" href="gui/?mode=bridge"><strong>Open GUI</strong></a>
-        <span class="pill">Prototype</span>
-      </div>
     </nav>
 
     <section class="hero">
       <h1><span class="brand-word"><span class="brand-white">Ches</span><span class="brand-accent">stein</span></span></h1>
       <p>Smart chessboard web interface for local play, Stockfish games, and online rooms between physical boards and browser players.</p>
-      <button class="hero-cta" onclick="createRoom()">
-        ▶ <span>Create Room<small>wait here until someone joins</small></span>
-      </button>
-      <div class="online-line"><span><span class="online-dot">●</span> GitHub Pages frontend</span><span>·</span><span>Cloudflare room backend ready</span><span>·</span><span>local bridge supported</span></div>
     </section>
 
     <section class="grid">
@@ -518,12 +510,12 @@
               <div class="field-note">Clock is enforced when the room starts. Increments are added after each move.</div>
             </div>
             <div class="field">
-              <label>Move preview visibility</label>
+              <label>Legal move display</label>
               <div class="segmented">
                 <button id="preview-private" class="active" onclick="setPreviewVisibility('private')">Private</button>
                 <button id="preview-public" onclick="setPreviewVisibility('public')">Public</button>
               </div>
-              <div class="field-note">Private keeps lifted-piece highlights on the same-side companion view. Public shows them to everyone.</div>
+              <div class="field-note">Private keeps legal-move hints on the same-side companion view. Public shows them to everyone in the room.</div>
             </div>
             <details class="advanced-settings">
               <summary>Advanced connection settings</summary>
