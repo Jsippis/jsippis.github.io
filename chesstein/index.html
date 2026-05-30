@@ -515,7 +515,7 @@
                   <option value="10">+10</option>
                 </select>
               </div>
-              <div class="field-note">No clock is enforced yet; this is stored and shown in the lobby.</div>
+              <div class="field-note">Clock is enforced when the room starts. Increments are added after each move.</div>
             </div>
             <div class="field">
               <label>Move preview visibility</label>
@@ -525,10 +525,13 @@
               </div>
               <div class="field-note">Private keeps lifted-piece highlights on the same-side companion view. Public shows them to everyone.</div>
             </div>
-            <div class="field">
-              <label>Online room backend URL</label>
-              <input id="server-url" value="https://chesstein.jospire1.workers.dev" placeholder="https://chesstein.jospire1.workers.dev" />
-            </div>
+            <details class="advanced-settings">
+              <summary>Advanced connection settings</summary>
+              <div class="field">
+                <label>Online room backend URL</label>
+                <input id="server-url" value="https://chesstein.jospire1.workers.dev" placeholder="https://chesstein.jospire1.workers.dev" />
+              </div>
+            </details>
             <button class="create-btn" onclick="createRoom()">＋ Create Room</button>
           </div>
         </div>
@@ -536,7 +539,7 @@
 
       <aside>
         <div class="quick-stack">
-          <a class="quick-card primary" href="gui/?mode=ai">
+          <a class="quick-card primary" href="gui/?mode=ai&connect=1">
             <span class="icon">▣</span>
             <span>vs AI</span>
             <small>Stockfish plays black through bridge</small>
@@ -554,12 +557,21 @@
         </div>
         <div class="bridge-status-card" id="bridge-status-card">
           <strong>Physical board bridge</strong>
-          <div class="small" id="bridge-status-text">Not connected. Start the bridge, then connect here.</div>
-          <input id="global-bridge-url" value="ws://localhost:8765" />
-          <button class="secondary-btn" onclick="connectLocalBridgeGlobal()">Connect Bridge</button>
+          <div class="small" id="bridge-status-text">Not connected. Start Chesstein Bridge, then connect here.</div>
+          <div class="bridge-actions">
+            <button class="secondary-btn" id="bridge-connect-btn" onclick="connectLocalBridgeGlobal()">Connect Bridge</button>
+            <button class="danger-btn" id="bridge-disconnect-btn" onclick="disconnectLocalBridgeGlobal()" style="display:none;">Disconnect</button>
+          </div>
+          <details class="advanced-settings">
+            <summary>Advanced bridge settings</summary>
+            <div class="field">
+              <label>Local bridge WebSocket</label>
+              <input id="global-bridge-url" value="ws://localhost:8765" />
+            </div>
+          </details>
         </div>
         <div class="bridge-note">
-          If you choose Physical Board, room creation/joining is handed to the local bridge. The browser stays as your companion view.
+          Connect the bridge only when using a physical board. Browser-only rooms do not need it.
         </div>
       </aside>
     </section>
@@ -680,8 +692,15 @@ function spectatorWsUrl(base, roomCode, name, viewColor = 'white') {
 function setBridgeStatus(kind, text) {
   const card = document.getElementById('bridge-status-card');
   const label = document.getElementById('bridge-status-text');
-  if (card) card.classList.toggle('connected', kind === 'connected');
+  const connectBtn = document.getElementById('bridge-connect-btn');
+  const disconnectBtn = document.getElementById('bridge-disconnect-btn');
+  const physicalSmall = document.querySelector('#physical-card small');
+  const connected = kind === 'connected';
+  if (card) card.classList.toggle('connected', connected);
   if (label) label.textContent = text;
+  if (connectBtn) connectBtn.style.display = connected ? 'none' : '';
+  if (disconnectBtn) disconnectBtn.style.display = connected ? '' : 'none';
+  if (physicalSmall) physicalSmall.textContent = connected ? 'bridge connected' : 'connect local bridge first';
 }
 
 function getGlobalBridgeUrl() {
@@ -715,9 +734,8 @@ function ensureLocalBridge() {
       reject(new Error('local_bridge_unreachable'));
     };
     localBridgeSocket.onclose = () => {
-      if (localBridgeSocket?.readyState !== WebSocket.OPEN) {
-        setBridgeStatus('offline', 'Local bridge disconnected.');
-      }
+      localBridgeSocket = null;
+      setBridgeStatus('offline', 'Local bridge disconnected.');
     };
     localBridgeSocket.onmessage = (event) => {
       let msg = null;
@@ -754,6 +772,15 @@ function bridgeRequest(payload, timeoutMs = 8000) {
 
 function connectLocalBridgeGlobal() {
   ensureLocalBridge().then(() => showToast('Local bridge connected.')).catch(() => showToast('Could not reach local bridge.'));
+}
+
+function disconnectLocalBridgeGlobal() {
+  if (localBridgeSocket) {
+    try { localBridgeSocket.close(); } catch {}
+  }
+  localBridgeSocket = null;
+  setBridgeStatus('offline', 'Local bridge disconnected.');
+  showToast('Local bridge disconnected.');
 }
 
 function guiUrl(params) {
@@ -974,10 +1001,9 @@ function renderWaitingRoom() {
   const hostText = waitingRoom.isBridgeHost ? 'Physical board is White.' : 'You are White.';
   const bridgeTools = waitingRoom.isBridgeHost ? '' : `
     <div class="bridge-connect-row">
-      <input id="local-bridge-url" value="${escapeHtml(localStorage.getItem('chessteinBridgeUrl') || DEFAULT_LOCAL_BRIDGE_URL)}" />
       <button class="secondary-btn" onclick="connectLocalBridgeToWaitingRoom()">Use Physical Board as Opponent</button>
     </div>
-    <div class="bridge-command">Bridge not running? Start it, then retry. Terminal fallback: <code>python stockfish_bridge.py --online-room ${escapeHtml(waitingRoom.roomCode)}</code></div>`;
+    <div class="bridge-command">Start Chesstein Bridge first, then this button can reserve the second player seat for your physical board.</div>`;
   panel.innerHTML = `<div class="waiting-card">
     <strong>${visibilityLabel} created</strong>
     <div>Waiting for an opponent. ${hostText}</div>
@@ -1201,6 +1227,7 @@ function escapeHtml(value) {
   }
   setPlayerDevice(localStorage.getItem('chessteinPlayerDevice') || 'gui');
   setPreviewVisibility(localStorage.getItem('chessteinPreviewVisibility') === 'public' ? 'public' : 'private');
+  setBridgeStatus('offline', 'Not connected. Start Chesstein Bridge, then connect here.');
 
   const params = new URLSearchParams(window.location.search);
   const joinCode = (params.get('join') || '').trim().toUpperCase();
