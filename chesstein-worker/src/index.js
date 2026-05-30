@@ -77,6 +77,31 @@ function getRoomStub(env, roomCode) {
   return env.GAME_ROOM.get(id);
 }
 
+async function validateLobbyRooms(env, rooms) {
+  const lobby = getLobbyStub(env);
+  const visible = [];
+
+  for (const room of Array.isArray(rooms) ? rooms : []) {
+    const roomCode = roomCodeFromPath(`/api/rooms/${room?.roomCode || ''}`, '/api/rooms/');
+    if (!roomCode) continue;
+
+    try {
+      const roomStub = getRoomStub(env, roomCode);
+      const response = await roomStub.fetch(new Request(`https://room/lobby-summary?roomCode=${roomCode}`, { method: 'GET' }));
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.ok && data.room) {
+        visible.push(data.room);
+      } else {
+        await lobby.fetch(new Request(`https://lobby/rooms/${roomCode}`, { method: 'DELETE' }));
+      }
+    } catch {
+      await lobby.fetch(new Request(`https://lobby/rooms/${roomCode}`, { method: 'DELETE' })).catch(() => {});
+    }
+  }
+
+  return visible;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -102,7 +127,9 @@ export default {
       const lobby = getLobbyStub(env);
       const response = await lobby.fetch(new Request('https://lobby/list', { method: 'GET' }));
       const data = await response.json();
-      return jsonResponse(request, env, data, response.status);
+      if (!response.ok || !data.ok) return jsonResponse(request, env, data, response.status);
+      const rooms = await validateLobbyRooms(env, data.rooms || []);
+      return jsonResponse(request, env, { ok: true, rooms }, response.status);
     }
 
     if (request.method === 'POST' && url.pathname === '/api/rooms') {

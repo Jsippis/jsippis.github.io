@@ -5,6 +5,7 @@ const MAX_PUBLIC_ROOMS = 50;
 const EMPTY_ROOM_TTL_MS = 30_000;
 const FINISHED_ROOM_TTL_MS = 5 * 60_000;
 const PUBLIC_WAITING_ROOM_TTL_MS = 30 * 60_000;
+const WAITING_CONNECT_GRACE_MS = 15_000;
 const BRIDGE_TOKEN_TTL_MS = 5 * 60_000;
 
 function nowIso() {
@@ -133,6 +134,21 @@ function publicRoomIsFresh(room) {
   const stamp = Date.parse(room.updatedAt || room.createdAt || '');
   if (!Number.isFinite(stamp)) return true;
   return Date.now() - stamp <= PUBLIC_WAITING_ROOM_TTL_MS;
+}
+
+function waitingRoomCanStayListed(snapshot, liveSessionCount) {
+  if (!snapshot || snapshot.visibility !== 'public' || snapshot.status !== 'waiting') return false;
+  if (!publicRoomIsFresh(snapshot)) return false;
+
+  const created = Date.parse(snapshot.createdAt || snapshot.updatedAt || '');
+  const ageMs = Number.isFinite(created) ? Date.now() - created : WAITING_CONNECT_GRACE_MS + 1;
+
+  // A newly-created HTTP room gets a short grace period before the creator's
+  // waiting WebSocket connects. After that, public rooms must have a live
+  // socket; otherwise old errored rooms would stay in the lobby forever.
+  if (liveSessionCount <= 0) return ageMs <= WAITING_CONNECT_GRACE_MS;
+
+  return !!snapshot.players?.white?.connected;
 }
 
 function prunePublicRooms(rooms) {
@@ -441,6 +457,26 @@ export class GameRoom {
       if (!existing) return Response.json({ ok: false, error: 'room_not_found' }, { status: 404 });
       this.snapshot = existing;
       return Response.json({ ok: true, room: publicSnapshot(this.snapshot) });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/lobby-summary') {
+      const existing = await this.storage.get('snapshot');
+      if (!existing) return Response.json({ ok: false, error: 'room_not_found' }, { status: 404 });
+      this.snapshot = existing;
+
+      if (!waitingRoomCanStayListed(this.snapshot, this.sessions.size)) {
+        if (this.snapshot.status === 'waiting' && this.sessions.size === 0) {
+          this.snapshot.status = 'abandoned';
+          this.snapshot.endedAt = this.snapshot.endedAt || nowIso();
+          this.snapshot.endReason = this.snapshot.endReason || 'empty_room';
+          await this.storage.put('snapshot', this.snapshot);
+          await this.storage.setAlarm(Date.now() + EMPTY_ROOM_TTL_MS);
+        }
+        await this.removeFromLobby();
+        return Response.json({ ok: false, remove: true, error: 'not_listable' }, { status: 404 });
+      }
+
+      return Response.json({ ok: true, room: publicRoomSummary(this.snapshot) });
     }
 
     if (request.method === 'DELETE' && url.pathname === '/cancel') {
