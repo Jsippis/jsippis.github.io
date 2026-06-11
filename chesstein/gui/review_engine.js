@@ -3,11 +3,21 @@
 
   const DEFAULT_ENGINE_SCRIPT = 'vendor/stockfish/stockfish-18-lite-single.js';
   const DEFAULT_ENGINE_WASM = 'vendor/stockfish/stockfish-18-lite-single.wasm';
-  const READY_TIMEOUT_MS = 12000;
+  const READY_TIMEOUT_MS = 45000;
+  const UCI_RETRY_MS = 1000;
   const SEARCH_TIMEOUT_MS = 20000;
 
+  function engineBaseUrl() {
+    const script = document.currentScript || [...document.scripts].find((entry) =>
+      entry.src && entry.src.endsWith('/review_engine.js')
+    );
+    return script?.src || window.location.href;
+  }
+
+  const ENGINE_BASE_URL = engineBaseUrl();
+
   function absoluteUrl(path) {
-    return new URL(path, window.location.href).href;
+    return new URL(path, ENGINE_BASE_URL).href;
   }
 
   class StockfishReviewEngine {
@@ -37,25 +47,37 @@
       this.readyPromise = new Promise((resolve, reject) => {
         const scriptUrl = absoluteUrl(this.scriptPath);
         const wasmUrl = absoluteUrl(this.wasmPath);
-        const workerUrl = `${scriptUrl}#${encodeURIComponent(wasmUrl)},worker`;
         let timer = null;
+        let uciRetry = null;
 
         const fail = (error) => {
           if (this.readyResolved || this.readyRejected) return;
           this.readyRejected = true;
           clearTimeout(timer);
+          clearInterval(uciRetry);
           reject(error instanceof Error ? error : new Error(String(error)));
         };
 
         try {
-          this.worker = new Worker(workerUrl);
+          // Stockfish.js can find the matching .wasm when the worker script and
+          // wasm file share the same basename. Avoid putting the wasm URL in the
+          // worker fragment because some browsers/hosts do not reliably preserve
+          // worker URL hashes during startup.
+          this.worker = new Worker(scriptUrl);
         } catch (error) {
-          fail(error);
-          return;
+          try {
+            this.worker = new Worker(`${scriptUrl}#${encodeURIComponent(wasmUrl)},worker`);
+          } catch (_) {
+            fail(error);
+            return;
+          }
         }
 
         timer = setTimeout(() => {
-          fail(new Error('Stockfish WASM did not become ready.'));
+          const tail = this.lastLines.slice(-8).join(' | ');
+          fail(new Error(tail
+            ? `Stockfish WASM did not become ready. Last engine output: ${tail}`
+            : 'Stockfish WASM did not become ready.'));
         }, READY_TIMEOUT_MS);
 
         this.worker.onerror = (event) => {
@@ -71,11 +93,18 @@
           } else if (line === 'readyok' && !this.readyResolved) {
             this.readyResolved = true;
             clearTimeout(timer);
+            clearInterval(uciRetry);
             resolve(this);
           }
         };
 
-        this.post('uci');
+        // Posting immediately usually works, but retrying protects against slow
+        // WASM startup or browsers that drop the very first early worker message.
+        const sendUci = () => {
+          if (!this.readyResolved && !this.readyRejected) this.post('uci');
+        };
+        setTimeout(sendUci, 50);
+        uciRetry = setInterval(sendUci, UCI_RETRY_MS);
       });
 
       return this.readyPromise;
