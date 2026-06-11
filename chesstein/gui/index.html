@@ -448,6 +448,41 @@
   .mini-actions { display: flex; gap: 8px; margin-top: 10px; }
   .mini-actions button { flex: 1; }
 
+
+  .review-card {
+    border-color: rgba(201, 162, 39, 0.35);
+    background: rgba(201, 162, 39, 0.06);
+  }
+  .review-card .review-title-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: baseline;
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+  .review-card .review-title-line strong { color: var(--text); }
+  .review-card .review-title-line span { color: var(--muted); font-size: 11px; }
+  .review-controls {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .review-controls button { padding: 7px 0; }
+  .review-fen {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .move-san.review-current {
+    background: rgba(201, 162, 39, 0.16);
+    color: var(--accent);
+  }
+  .move-san.review-clickable { cursor: pointer; }
+
   .promotion-modal {
     display: none;
     position: fixed;
@@ -572,6 +607,23 @@
       <div class="card-title">move history</div>
       <div class="move-history" id="move-history"></div>
     </div>
+
+    <div class="card review-card" id="review-card" style="display:none;">
+      <div class="card-title">review</div>
+      <div class="review-title-line">
+        <strong id="review-heading">Start position</strong>
+        <span id="review-ply-counter">0 / 0</span>
+      </div>
+      <div id="review-move-detail" style="font-size:12px; color:var(--muted); line-height:1.45;">Use the controls to step through the game.</div>
+      <div class="review-controls">
+        <button onclick="reviewFirst()">|&lt;</button>
+        <button onclick="reviewPrev()">&lt;</button>
+        <button onclick="exitReviewMode()">live</button>
+        <button onclick="reviewNext()">&gt;</button>
+        <button onclick="reviewLast()">&gt;|</button>
+      </div>
+      <div class="review-fen" id="review-fen"></div>
+    </div>
   </div>
 </div>
 
@@ -652,6 +704,13 @@ let state = {
 let ws = null;
 let pendingPromotion = null;
 let clockInterval = null;
+let reviewState = {
+  active: false,
+  positions: [],
+  moves: [],
+  index: 0,
+  missingUci: false
+};
 
 const query = new URLSearchParams(window.location.search);
 const launchMode = query.get('mode') || 'bridge';
@@ -780,6 +839,9 @@ function boardToFen() {
 function buildBoard() {
   const el = document.getElementById('board');
   el.innerHTML = '';
+  const display = currentDisplayState();
+  const displayBoard = display.board;
+  const displayLastMove = display.lastMove;
   const ranks = state.flipped
     ? [0,1,2,3,4,5,6,7]
     : [7,6,5,4,3,2,1,0];
@@ -806,20 +868,20 @@ function buildBoard() {
       sq.className = 'sq ' + ((rank + file) % 2 === 0 ? 'dark' : 'light');
       sq.dataset.idx = idx;
 
-      if (state.lastMove && (state.lastMove[0] === idx || state.lastMove[1] === idx)) {
+      if (displayLastMove && (displayLastMove[0] === idx || displayLastMove[1] === idx)) {
         sq.classList.add('lastmove');
       }
-      if (state.aiHint && (state.aiHint[0] === idx || state.aiHint[1] === idx)) {
+      if (!reviewState.active && state.aiHint && (state.aiHint[0] === idx || state.aiHint[1] === idx)) {
         sq.classList.add('ai-hint');
       }
-      if (state.selected === idx) {
+      if (!reviewState.active && state.selected === idx) {
         sq.classList.add('selected');
       }
-      if (state.legalMoves.some(m => m.to === idx)) {
-        sq.classList.add(state.board[idx] ? 'legal-capture' : 'legal-target');
+      if (!reviewState.active && state.legalMoves.some(m => m.to === idx)) {
+        sq.classList.add(displayBoard[idx] ? 'legal-capture' : 'legal-target');
       }
 
-      const piece = state.board[idx];
+      const piece = displayBoard[idx];
       if (piece) {
         sq.appendChild(createPieceElement(piece));
       }
@@ -846,6 +908,10 @@ function buildBoard() {
 }
 
 function handleSquareClick(idx) {
+  if (reviewState.active) {
+    setStatus('Review mode is read-only. Click live to return to the current board.');
+    return;
+  }
   if (state.gameOver) return;
   if (isOnlineGame()) {
     if (!isOnlinePlayer()) {
@@ -994,7 +1060,7 @@ function applyLocalMove(from, to, promotion) {
 
   const moveNum = Math.ceil((state.moveHistory.length + 1) / 2);
   const san = generateSAN(from, to, result.piece, result.captured, promotion);
-  state.moveHistory.push({ from, to, san, piece: result.piece, moveNum });
+  state.moveHistory.push({ from, to, uci: idxToAlg(from) + idxToAlg(to) + (promotion || ''), san, piece: result.piece, moveNum });
   state.lastMove = [from, to];
   state.turn = state.turn === 'w' ? 'b' : 'w';
   buildBoard();
@@ -1336,8 +1402,30 @@ function updatePlayerStrips() {
 function updateTurn() {
   const dot = document.getElementById('turn-dot');
   const text = document.getElementById('turn-text');
-  dot.className = 'turn-dot ' + (state.turn === 'w' ? 'white' : 'black');
+  const display = currentDisplayState();
+  dot.className = 'turn-dot ' + (display.turn === 'w' ? 'white' : 'black');
+  if (reviewState.active) {
+    const move = reviewState.moves[Math.max(0, reviewState.index - 1)] || null;
+    text.textContent = reviewState.index === 0
+      ? 'Review: start position'
+      : `Review: ${reviewState.index}/${reviewState.moves.length} · ${move?.san || move?.uci || ''}`;
+    return;
+  }
   text.textContent = state.turn === 'w' ? 'White to move' : 'Black to move';
+}
+
+function moveToUci(move) {
+  if (!move) return null;
+  if (move.uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(String(move.uci).toLowerCase())) return String(move.uci).toLowerCase();
+  if (Number.isInteger(move.from) && Number.isInteger(move.to)) {
+    return idxToAlg(move.from) + idxToAlg(move.to) + (move.promotion || '');
+  }
+  return null;
+}
+
+function moveDisplayText(move) {
+  if (!move) return '';
+  return move.san || move.uci || moveToUci(move) || '';
 }
 
 function updateHistory() {
@@ -1348,24 +1436,58 @@ function updateHistory() {
     pairs.push({
       num: Math.ceil((i+1)/2),
       w: state.moveHistory[i],
-      b: state.moveHistory[i+1]
+      b: state.moveHistory[i+1],
+      wPly: i + 1,
+      bPly: i + 2
     });
   }
   pairs.forEach((pair, pi) => {
     const row = document.createElement('div');
     row.className = 'move-pair';
-    row.innerHTML = `<span class="move-num">${pair.num}.</span>
-      <span class="move-san${pi===pairs.length-1&&state.turn==='b' ? ' current' : ''}">${pair.w ? pair.w.san : ''}</span>
-      <span class="move-san${pair.b&&pi===pairs.length-1 ? ' current' : ''}">${pair.b ? pair.b.san : ''}</span>`;
+
+    const num = document.createElement('span');
+    num.className = 'move-num';
+    num.textContent = `${pair.num}.`;
+    row.appendChild(num);
+
+    const white = document.createElement('span');
+    white.className = moveClassForHistory(pair.w, pair.wPly, pi, 'w');
+    white.textContent = pair.w ? moveDisplayText(pair.w) : '';
+    if (pair.w && reviewState.active) white.onclick = () => goToReviewPly(pair.wPly);
+    row.appendChild(white);
+
+    const black = document.createElement('span');
+    black.className = moveClassForHistory(pair.b, pair.bPly, pi, 'b');
+    black.textContent = pair.b ? moveDisplayText(pair.b) : '';
+    if (pair.b && reviewState.active) black.onclick = () => goToReviewPly(pair.bPly);
+    row.appendChild(black);
+
     el.appendChild(row);
   });
-  el.scrollTop = el.scrollHeight;
+  if (reviewState.active) {
+    const current = el.querySelector('.review-current');
+    if (current) current.scrollIntoView({ block: 'nearest' });
+  } else {
+    el.scrollTop = el.scrollHeight;
+  }
 }
 
-function computeCapturedFromBoard() {
+function moveClassForHistory(move, ply, pairIndex, color) {
+  const classes = ['move-san'];
+  if (reviewState.active && move) {
+    classes.push('review-clickable');
+    if (reviewState.index === ply) classes.push('review-current');
+  } else if (!reviewState.active) {
+    if (color === 'w' && pairIndex === Math.floor((state.moveHistory.length - 1) / 2) && state.turn === 'b') classes.push('current');
+    if (color === 'b' && move && pairIndex === Math.floor((state.moveHistory.length - 1) / 2) && state.turn === 'w') classes.push('current');
+  }
+  return classes.join(' ');
+}
+
+function computeCapturedFromBoard(board = state.board) {
   const counts = {};
   Object.keys(START_COUNTS).forEach(k => counts[k] = 0);
-  state.board.forEach(piece => {
+  board.forEach(piece => {
     if (piece && counts[piece] !== undefined) counts[piece]++;
   });
 
@@ -1382,13 +1504,185 @@ function computeCapturedFromBoard() {
 }
 
 function updateCaptured() {
+  const displayCaptured = reviewState.active
+    ? computeCapturedFromBoard(currentDisplayState().board)
+    : state.captured;
   ['w','b'].forEach(color => {
     const el = document.getElementById('captures-' + (color === 'w' ? 'white' : 'black'));
     el.innerHTML = '';
-    state.captured[color].forEach(piece => {
+    displayCaptured[color].forEach(piece => {
       el.appendChild(createPieceElement(piece, 'captured-piece'));
     });
   });
+}
+
+function currentDisplayState() {
+  if (reviewState.active && reviewState.positions[reviewState.index]) {
+    return reviewState.positions[reviewState.index];
+  }
+  return {
+    board: state.board,
+    turn: state.turn,
+    castling: state.castling,
+    enPassant: state.enPassant,
+    halfmove: state.halfmove,
+    fullmove: state.fullmove,
+    fen: state.fen || boardToFen(),
+    lastMove: state.lastMove
+  };
+}
+
+function clonePosition(position) {
+  return {
+    board: position.board.slice(),
+    turn: position.turn,
+    castling: position.castling,
+    enPassant: position.enPassant,
+    halfmove: position.halfmove,
+    fullmove: position.fullmove,
+    fen: position.fen,
+    lastMove: position.lastMove ? position.lastMove.slice() : null
+  };
+}
+
+function positionToFen(position) {
+  const previous = {
+    board: state.board,
+    turn: state.turn,
+    castling: state.castling,
+    enPassant: state.enPassant,
+    halfmove: state.halfmove,
+    fullmove: state.fullmove
+  };
+  state.board = position.board;
+  state.turn = position.turn;
+  state.castling = position.castling;
+  state.enPassant = position.enPassant;
+  state.halfmove = position.halfmove;
+  state.fullmove = position.fullmove;
+  const fen = boardToFen();
+  state.board = previous.board;
+  state.turn = previous.turn;
+  state.castling = previous.castling;
+  state.enPassant = previous.enPassant;
+  state.halfmove = previous.halfmove;
+  state.fullmove = previous.fullmove;
+  return fen;
+}
+
+function buildReviewTimeline() {
+  const start = {
+    board: fenToBoard(START_FEN),
+    turn: 'w',
+    castling: 'KQkq',
+    enPassant: '-',
+    halfmove: 0,
+    fullmove: 1,
+    fen: START_FEN,
+    lastMove: null
+  };
+  const positions = [clonePosition(start)];
+  const moves = [];
+  let pos = clonePosition(start);
+  let missingUci = false;
+
+  for (const rawMove of state.moveHistory) {
+    const uci = moveToUci(rawMove);
+    if (!uci) {
+      missingUci = true;
+      break;
+    }
+    const from = algToIdx(uci.slice(0, 2));
+    const to = algToIdx(uci.slice(2, 4));
+    const promotion = uci.length === 5 ? uci[4] : null;
+    const result = applyMoveToBoard(pos.board, {
+      from,
+      to,
+      promotion,
+      castling: pos.castling,
+      enPassant: pos.enPassant,
+      halfmove: pos.halfmove,
+      fullmove: pos.fullmove
+    });
+    pos = {
+      board: result.board,
+      turn: pos.turn === 'w' ? 'b' : 'w',
+      castling: result.castling,
+      enPassant: result.enPassant,
+      halfmove: result.halfmove,
+      fullmove: result.fullmove,
+      fen: '',
+      lastMove: [from, to]
+    };
+    pos.fen = positionToFen(pos);
+    const move = { ...rawMove, uci, from, to, promotion, san: rawMove.san || uci };
+    moves.push(move);
+    positions.push(clonePosition(pos));
+  }
+
+  return { positions, moves, missingUci };
+}
+
+function enterReviewMode() {
+  const timeline = buildReviewTimeline();
+  if (!timeline.moves.length) {
+    setStatus('Review needs move history with UCI moves. Online Chesstein games are supported first.', true);
+    return;
+  }
+  reviewState = {
+    active: true,
+    positions: timeline.positions,
+    moves: timeline.moves,
+    index: timeline.positions.length - 1,
+    missingUci: timeline.missingUci
+  };
+  const card = document.getElementById('review-card');
+  if (card) card.style.display = '';
+  renderReviewPanel();
+  buildBoard();
+  setStatus(timeline.missingUci
+    ? 'Review opened with the moves that had UCI data. Some older moves could not be reconstructed.'
+    : 'Review mode. Step through moves or click a move in the history.');
+}
+
+function exitReviewMode() {
+  reviewState.active = false;
+  const card = document.getElementById('review-card');
+  if (card) card.style.display = 'none';
+  buildBoard();
+  setStatus(state.gameOver ? 'Returned to final game position.' : 'Returned to live board.');
+}
+
+function goToReviewPly(ply) {
+  if (!reviewState.active) return;
+  reviewState.index = Math.max(0, Math.min(reviewState.positions.length - 1, Number(ply) || 0));
+  renderReviewPanel();
+  buildBoard();
+}
+
+function reviewFirst() { goToReviewPly(0); }
+function reviewPrev() { goToReviewPly(reviewState.index - 1); }
+function reviewNext() { goToReviewPly(reviewState.index + 1); }
+function reviewLast() { goToReviewPly(reviewState.positions.length - 1); }
+
+function renderReviewPanel() {
+  if (!reviewState.active) return;
+  const pos = reviewState.positions[reviewState.index];
+  const move = reviewState.moves[Math.max(0, reviewState.index - 1)] || null;
+  const heading = document.getElementById('review-heading');
+  const counter = document.getElementById('review-ply-counter');
+  const detail = document.getElementById('review-move-detail');
+  const fen = document.getElementById('review-fen');
+
+  if (heading) heading.textContent = reviewState.index === 0 ? 'Start position' : `After ${moveDisplayText(move)}`;
+  if (counter) counter.textContent = `${reviewState.index} / ${reviewState.moves.length}`;
+  if (detail) {
+    const side = pos.turn === 'w' ? 'White' : 'Black';
+    detail.textContent = reviewState.index === 0
+      ? 'Initial board. White to move.'
+      : `${side} to move after ${moveDisplayText(move)}${move?.uci ? ` (${move.uci})` : ''}.`;
+  }
+  if (fen) fen.textContent = pos.fen || positionToFen(pos);
 }
 
 function setStatus(msg, alert = false) {
@@ -1398,6 +1692,9 @@ function setStatus(msg, alert = false) {
 }
 
 function resetLocalState(statusText = 'New game started.') {
+  reviewState.active = false;
+  const reviewCard = document.getElementById('review-card');
+  if (reviewCard) reviewCard.style.display = 'none';
   state.board = fenToBoard(START_FEN);
   state.turn = 'w';
   state.selected = null;
@@ -1674,7 +1971,7 @@ function applyOnlineRoom(room) {
   maybeAutoFlipForOnline();
   if (room.fen) applyFen(normalizeFenForGui(room.fen));
   if (Array.isArray(room.history)) {
-    setHistoryFromSans(room.history.map(item => typeof item === 'string' ? item : (item.san || item.uci || '')).filter(Boolean));
+    setHistoryFromEntries(room.history);
   }
   state.gameOver = ['finished', 'cancelled', 'abandoned'].includes(room.status);
   applyOnlinePresence(room);
@@ -1854,13 +2151,14 @@ function renderOnlineGameOverPanel() {
   } else {
     rematchHtml = `<div class="mini-actions">
       <button onclick="requestRematch()">rematch</button>
+      <button onclick="enterReviewMode()">review</button>
       <button onclick="backToLobby()">back to lobby</button>
     </div>`;
   }
 
   panel.innerHTML = `<strong>${escapeHtml(formatGameOverText(state.result, state.endReason))}</strong>
     ${rematchHtml}
-    ${offerBy ? '<div class="mini-actions"><button onclick="backToLobby()">back to lobby</button></div>' : ''}`;
+    ${offerBy ? '<div class="mini-actions"><button onclick="enterReviewMode()">review</button><button onclick="backToLobby()">back to lobby</button></div>' : ''}`;
 }
 
 function formatGameOverText(result, reason) {
@@ -1894,19 +2192,46 @@ function movesFromUciList(moves) {
   }));
 }
 
+function setHistoryFromEntries(history) {
+  state.moveHistory = (history || []).map((entry, i) => {
+    if (typeof entry === 'string') {
+      return { san: entry, moveNum: Math.ceil((i + 1) / 2) };
+    }
+    const uci = entry?.uci ? String(entry.uci).toLowerCase() : null;
+    const move = {
+      san: entry?.san || uci || '',
+      uci,
+      by: entry?.by || null,
+      at: entry?.at || null,
+      moveNum: Math.ceil((i + 1) / 2)
+    };
+    if (uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) {
+      move.from = algToIdx(uci.slice(0, 2));
+      move.to = algToIdx(uci.slice(2, 4));
+      move.promotion = uci.length === 5 ? uci[4] : null;
+    }
+    return move;
+  }).filter(move => move.san || move.uci);
+}
+
 function setHistoryFromSans(history) {
-  state.moveHistory = history.map((san, i) => ({
-    san,
-    moveNum: Math.ceil((i + 1) / 2)
-  }));
+  setHistoryFromEntries(history);
 }
 
 function appendMoveFallback(msg) {
-  if (!msg.san) return;
+  const uci = msg.uci ? String(msg.uci).toLowerCase() : null;
+  const san = msg.san || uci;
+  if (!san) return;
   const last = state.moveHistory[state.moveHistory.length - 1];
-  if (last && last.san === msg.san) return;
+  if (last && ((uci && last.uci === uci) || (!uci && last.san === san))) return;
   const num = Math.ceil((state.moveHistory.length + 1) / 2);
-  state.moveHistory.push({ san: msg.san, moveNum: num });
+  const move = { san, uci, moveNum: num };
+  if (uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) {
+    move.from = algToIdx(uci.slice(0, 2));
+    move.to = algToIdx(uci.slice(2, 4));
+    move.promotion = uci.length === 5 ? uci[4] : null;
+  }
+  state.moveHistory.push(move);
 }
 
 function setLastMoveFromUci(uci) {
@@ -1973,6 +2298,11 @@ function applyServerState(msg, options = {}) {
   state.gameOver = false;
   state.lastMove = null;
   state.aiHint = null;
+  if (reviewState.active && options.reset) {
+    reviewState.active = false;
+    const reviewCard = document.getElementById('review-card');
+    if (reviewCard) reviewCard.style.display = 'none';
+  }
 
   if (msg.fen) applyFen(msg.fen);
   if (msg.turn) state.turn = msg.turn;
