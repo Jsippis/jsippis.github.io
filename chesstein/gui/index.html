@@ -487,6 +487,63 @@
     margin-top: 10px;
   }
   .review-controls button { padding: 7px 0; }
+  .review-progress {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    min-height: 16px;
+  }
+  .review-graph-wrap {
+    display: none;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .review-graph-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 7px;
+  }
+  .review-graph-title strong {
+    color: var(--text);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .review-graph {
+    width: 100%;
+    height: 58px;
+    display: block;
+    overflow: visible;
+  }
+  .review-graph-baseline { stroke: rgba(232, 220, 200, 0.22); stroke-width: 1; }
+  .review-graph-line { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  .review-graph-current { fill: var(--text); stroke: var(--accent); stroke-width: 1.5; }
+  .review-arrows {
+    position: absolute;
+    left: 2px;
+    top: calc(42px + 2px);
+    width: calc(var(--sq) * 8);
+    height: calc(var(--sq) * 8);
+    pointer-events: none;
+    z-index: 6;
+    overflow: visible;
+  }
+  .review-arrow-line {
+    fill: none;
+    stroke-width: 9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.86;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.55));
+  }
+  .review-arrow-line.played { stroke: rgba(232, 220, 200, 0.82); }
+  .review-arrow-line.best { stroke: var(--accent); }
   .review-engine {
     margin-top: 12px;
     border: 1px solid rgba(201, 162, 39, 0.22);
@@ -636,6 +693,7 @@
       <div class="review-eval-white" id="review-eval-white"></div>
       <div class="review-eval-label" id="review-eval-label">0.0</div>
     </div>
+    <svg class="review-arrows" id="review-arrows" viewBox="0 0 576 576" style="display:none;" aria-hidden="true"></svg>
     <div id="board"></div>
     <div class="file-labels">
       <div class="file-label">a</div><div class="file-label">b</div>
@@ -675,6 +733,10 @@
     <div class="card">
       <div class="card-title">move history</div>
       <div class="move-history" id="move-history"></div>
+      <div class="review-graph-wrap" id="review-graph-wrap">
+        <div class="review-graph-title"><span>evaluation</span><strong id="review-graph-label">—</strong></div>
+        <svg class="review-graph" id="review-eval-graph" viewBox="0 0 260 58" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
     </div>
 
     <div class="card review-card" id="review-card" style="display:none;">
@@ -691,13 +753,15 @@
         <button onclick="reviewNext()">&gt;</button>
         <button onclick="reviewLast()">&gt;|</button>
       </div>
+      <div class="review-progress" id="review-analysis-progress">Analysis starts when review opens.</div>
       <div class="review-engine" id="review-engine-box">
         <div class="review-engine-row"><span>Stockfish</span><strong id="review-engine-status">idle</strong></div>
         <div class="review-score" id="review-score">—</div>
+        <div class="review-engine-row"><span>Played</span><strong id="review-played-move">—</strong></div>
         <div class="review-engine-row"><span>Best</span><strong id="review-best-move">—</strong></div>
         <div class="review-engine-line" id="review-engine-line">Engine analysis starts after review opens.</div>
         <div class="review-engine-actions">
-          <button onclick="requestReviewAnalysis(true)">analyze</button>
+          <button onclick="requestReviewAnalysis(true)">analyze game</button>
         </div>
       </div>
     </div>
@@ -787,7 +851,9 @@ let reviewState = {
   positions: [],
   moves: [],
   index: 0,
-  missingUci: false
+  missingUci: false,
+  analysisStarted: false,
+  analysisProgress: { done: 0, total: 0, running: false }
 };
 
 const REVIEW_ENGINE_DEPTH = 12;
@@ -796,6 +862,10 @@ let reviewAnalysisSeq = 0;
 let reviewAnalysisTimer = null;
 let reviewAnalysisInFlightFen = null;
 const reviewAnalysisCache = new Map();
+let reviewAnalysisRunActive = false;
+let reviewAnalysisRequested = false;
+let reviewAnalysisFocusPly = 0;
+let reviewAnalysisForcePly = null;
 
 const query = new URLSearchParams(window.location.search);
 const launchMode = query.get('mode') || 'bridge';
@@ -992,6 +1062,7 @@ function buildBoard() {
   updateHistory();
   updateTurn();
   updatePlayerStrips();
+  updateReviewArrows();
 }
 
 function handleSquareClick(idx) {
@@ -1722,7 +1793,9 @@ function enterReviewMode() {
     positions: timeline.positions,
     moves: timeline.moves,
     index: timeline.positions.length - 1,
-    missingUci: timeline.missingUci
+    missingUci: timeline.missingUci,
+    analysisStarted: false,
+    analysisProgress: { done: 0, total: timeline.positions.length, running: false }
   };
   const card = document.getElementById('review-card');
   if (card) card.style.display = '';
@@ -1739,6 +1812,8 @@ function exitReviewMode() {
   const card = document.getElementById('review-card');
   if (card) card.style.display = 'none';
   updateReviewEvalBar(null);
+  updateReviewEvalGraph();
+  updateReviewArrows();
   buildBoard();
   setStatus(state.gameOver ? 'Returned to final game position.' : 'Returned to live board.');
 }
@@ -1772,7 +1847,7 @@ function renderReviewPanel() {
       : `${side} to move after ${moveDisplayText(move)}.`;
   }
   renderReviewAnalysisPanel(pos);
-  scheduleReviewAnalysis();
+  queueReviewGameAnalysis(reviewState.index, false);
 }
 
 function reviewAnalysisAllowed() {
@@ -1791,69 +1866,154 @@ function ensureReviewEngine() {
   return reviewEngine.init();
 }
 
-function scheduleReviewAnalysis() {
+function analysisCacheKeyForPly(ply) {
+  const pos = reviewState.positions[ply];
+  return pos ? (pos.fen || positionToFen(pos)) : '';
+}
+
+function analysisForPly(ply) {
+  const key = analysisCacheKeyForPly(ply);
+  return key ? reviewAnalysisCache.get(key) || null : null;
+}
+
+function countCachedReviewAnalyses() {
+  if (!reviewState.positions.length) return 0;
+  let done = 0;
+  const seen = new Set();
+  for (let i = 0; i < reviewState.positions.length; i++) {
+    const key = analysisCacheKeyForPly(i);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (reviewAnalysisCache.has(key)) done++;
+  }
+  return done;
+}
+
+function countDistinctReviewPositions() {
+  const seen = new Set();
+  for (let i = 0; i < reviewState.positions.length; i++) {
+    const key = analysisCacheKeyForPly(i);
+    if (key) seen.add(key);
+  }
+  return seen.size;
+}
+
+function buildReviewAnalysisOrder(focusPly) {
+  const max = reviewState.positions.length - 1;
+  const order = [];
+  const add = (ply) => {
+    const n = Math.max(0, Math.min(max, Number(ply) || 0));
+    if (!order.includes(n)) order.push(n);
+  };
+  add(focusPly);
+  if (focusPly > 0) add(focusPly - 1); // Needed for played-vs-best on the selected move.
+  for (let i = 0; i <= max; i++) add(i);
+  return order;
+}
+
+function queueReviewGameAnalysis(focusPly = reviewState.index, force = false) {
   if (!reviewState.active) return;
-  const pos = reviewState.positions[reviewState.index];
-  if (!pos) return;
-  const fen = pos.fen || positionToFen(pos);
   if (!reviewAnalysisAllowed()) {
-    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.', score: null });
+    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.' });
     updateReviewEvalBar(null);
+    updateReviewAnalysisProgressUi();
+    updateReviewEvalGraph();
     return;
   }
-  const cached = reviewAnalysisCache.get(fen);
-  if (cached) {
-    setReviewEngineUi({ status: `depth ${cached.depth || '?'}`, analysis: cached });
-    updateReviewEvalBar(cached.whiteScore);
+
+  reviewState.analysisStarted = true;
+  reviewAnalysisFocusPly = Math.max(0, Math.min(reviewState.positions.length - 1, Number(focusPly) || 0));
+  if (force) reviewAnalysisForcePly = reviewAnalysisFocusPly;
+
+  if (reviewAnalysisRunActive) {
+    reviewAnalysisRequested = true;
+    updateReviewAnalysisProgressUi(true);
     return;
   }
-  if (reviewAnalysisInFlightFen === fen) return;
+
   clearTimeout(reviewAnalysisTimer);
-  setReviewEngineUi({ status: 'queued', message: 'Waiting to analyze this position…', score: null });
-  updateReviewEvalBar(null);
-  reviewAnalysisTimer = setTimeout(() => requestReviewAnalysis(false), 280);
+  reviewAnalysisTimer = setTimeout(() => {
+    runReviewGameAnalysis(++reviewAnalysisSeq).catch((error) => {
+      if (reviewState.active) {
+        setReviewEngineUi({ status: 'unavailable', message: error?.message || 'Stockfish analysis failed.' });
+        updateReviewAnalysisProgressUi(false, error?.message || 'Stockfish analysis failed.');
+      }
+    });
+  }, force ? 0 : 220);
 }
 
 async function requestReviewAnalysis(force = false) {
-  if (!reviewState.active) return;
-  const pos = reviewState.positions[reviewState.index];
-  if (!pos) return;
-  if (!reviewAnalysisAllowed()) {
-    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.', score: null });
-    updateReviewEvalBar(null);
-    return;
-  }
-  const fen = pos.fen || positionToFen(pos);
-  if (!force && reviewAnalysisCache.has(fen)) {
-    const cached = reviewAnalysisCache.get(fen);
-    setReviewEngineUi({ status: `depth ${cached.depth || '?'}`, analysis: cached });
-    updateReviewEvalBar(cached.whiteScore);
-    return;
-  }
-  clearTimeout(reviewAnalysisTimer);
-  const seq = ++reviewAnalysisSeq;
-  reviewAnalysisInFlightFen = fen;
-  setReviewEngineUi({ status: 'starting', message: 'Starting Stockfish WASM…', score: null });
-  updateReviewEvalBar(null);
+  queueReviewGameAnalysis(reviewState.index, force);
+}
+
+async function runReviewGameAnalysis(seq) {
+  if (!reviewState.active || !reviewAnalysisAllowed()) return;
+  reviewAnalysisRunActive = true;
 
   try {
     const engine = await ensureReviewEngine();
     if (seq !== reviewAnalysisSeq || !reviewState.active) return;
-    setReviewEngineUi({ status: 'analyzing', message: `Analyzing to depth ${REVIEW_ENGINE_DEPTH}…`, score: null });
-    const raw = await engine.analyzeFen(fen, { depth: REVIEW_ENGINE_DEPTH });
-    if (seq !== reviewAnalysisSeq || !reviewState.active) return;
-    const currentPos = reviewState.positions[reviewState.index];
-    if (!currentPos || (currentPos.fen || positionToFen(currentPos)) !== fen) return;
-    const analysis = enrichReviewAnalysis(raw, currentPos);
-    reviewAnalysisCache.set(fen, analysis);
-    setReviewEngineUi({ status: `depth ${analysis.depth || REVIEW_ENGINE_DEPTH}`, analysis });
-    updateReviewEvalBar(analysis.whiteScore);
-  } catch (error) {
-    if (seq !== reviewAnalysisSeq || !reviewState.active) return;
-    setReviewEngineUi({ status: 'unavailable', message: error?.message || 'Stockfish analysis failed.', score: null });
-    updateReviewEvalBar(null);
+
+    while (reviewState.active && seq === reviewAnalysisSeq) {
+      reviewAnalysisRequested = false;
+      const focusPly = reviewAnalysisFocusPly;
+      const forcePly = reviewAnalysisForcePly;
+      reviewAnalysisForcePly = null;
+      const order = buildReviewAnalysisOrder(focusPly);
+      const total = countDistinctReviewPositions();
+      reviewState.analysisProgress = { done: countCachedReviewAnalyses(), total, running: true };
+      updateReviewAnalysisProgressUi(true);
+
+      for (const ply of order) {
+        if (!reviewState.active || seq !== reviewAnalysisSeq) return;
+        const pos = reviewState.positions[ply];
+        if (!pos) continue;
+        const fen = pos.fen || positionToFen(pos);
+        const alreadyCached = reviewAnalysisCache.has(fen);
+        if (alreadyCached && ply !== forcePly) continue;
+
+        reviewAnalysisInFlightFen = fen;
+        if (ply === reviewState.index || ply === reviewState.index - 1) {
+          setReviewEngineUi({ status: 'analyzing', message: `Analyzing to depth ${REVIEW_ENGINE_DEPTH}…` });
+        }
+        updateReviewAnalysisProgressUi(true);
+
+        try {
+          const raw = await engine.analyzeFen(fen, { depth: REVIEW_ENGINE_DEPTH });
+          if (!reviewState.active || seq !== reviewAnalysisSeq) return;
+          const analysis = enrichReviewAnalysis(raw, pos, ply);
+          reviewAnalysisCache.set(fen, analysis);
+        } catch (error) {
+          if (error?.message !== 'Analysis cancelled.') throw error;
+          return;
+        } finally {
+          if (reviewAnalysisInFlightFen === fen) reviewAnalysisInFlightFen = null;
+        }
+
+        reviewState.analysisProgress = { done: countCachedReviewAnalyses(), total, running: true };
+        renderReviewAnalysisPanel(reviewState.positions[reviewState.index]);
+        updateReviewEvalGraph();
+        updateReviewArrows();
+
+        if (reviewAnalysisRequested) break;
+      }
+
+      if (!reviewAnalysisRequested) break;
+    }
   } finally {
-    if (seq === reviewAnalysisSeq) reviewAnalysisInFlightFen = null;
+    reviewAnalysisRunActive = false;
+    reviewAnalysisInFlightFen = null;
+    if (reviewState.active) {
+      reviewState.analysisProgress = {
+        done: countCachedReviewAnalyses(),
+        total: countDistinctReviewPositions(),
+        running: false
+      };
+      renderReviewAnalysisPanel(reviewState.positions[reviewState.index]);
+      updateReviewAnalysisProgressUi(false);
+      updateReviewEvalGraph();
+      updateReviewArrows();
+    }
   }
 }
 
@@ -1861,6 +2021,9 @@ function stopReviewAnalysis() {
   clearTimeout(reviewAnalysisTimer);
   reviewAnalysisSeq++;
   reviewAnalysisInFlightFen = null;
+  reviewAnalysisRunActive = false;
+  reviewAnalysisRequested = false;
+  reviewAnalysisForcePly = null;
   if (reviewEngine) reviewEngine.stop();
 }
 
@@ -1868,32 +2031,82 @@ function renderReviewAnalysisPanel(pos) {
   const bar = document.getElementById('review-eval-bar');
   if (bar) bar.style.display = reviewState.active ? '' : 'none';
   if (!reviewState.active || !pos) return;
-  const cached = reviewAnalysisCache.get(pos.fen || positionToFen(pos));
-  if (cached) {
-    setReviewEngineUi({ status: `depth ${cached.depth || '?'}`, analysis: cached });
-    updateReviewEvalBar(cached.whiteScore);
-  } else if (!reviewAnalysisAllowed()) {
-    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.', score: null });
+
+  const currentPly = reviewState.index;
+  const move = reviewState.moves[Math.max(0, currentPly - 1)] || null;
+  const currentAnalysis = analysisForPly(currentPly);
+  const bestSourcePly = currentPly > 0 ? currentPly - 1 : currentPly;
+  const bestAnalysis = analysisForPly(bestSourcePly);
+
+  if (!reviewAnalysisAllowed()) {
+    setReviewEngineUi({
+      status: 'locked',
+      move,
+      currentAnalysis: null,
+      bestAnalysis: null,
+      message: 'Engine review unlocks after the game is finished.'
+    });
     updateReviewEvalBar(null);
+    updateReviewAnalysisProgressUi(false);
+    updateReviewEvalGraph();
+    return;
   }
+
+  const status = currentAnalysis
+    ? `depth ${currentAnalysis.depth || REVIEW_ENGINE_DEPTH}`
+    : (reviewState.analysisStarted ? (reviewState.analysisProgress.running ? 'analyzing' : 'queued') : 'idle');
+
+  setReviewEngineUi({
+    status,
+    move,
+    currentAnalysis,
+    bestAnalysis,
+    message: reviewState.analysisStarted ? 'Analyzing game…' : 'Engine analysis starts after review opens.'
+  });
+  updateReviewEvalBar(currentAnalysis?.whiteScore || null);
+  updateReviewAnalysisProgressUi(reviewState.analysisProgress.running);
+  updateReviewEvalGraph();
 }
 
-function setReviewEngineUi({ status, analysis = null, message = '', score = null }) {
+function setReviewEngineUi({ status, currentAnalysis = null, bestAnalysis = null, move = null, message = '' }) {
   const statusEl = document.getElementById('review-engine-status');
   const scoreEl = document.getElementById('review-score');
+  const playedEl = document.getElementById('review-played-move');
   const bestEl = document.getElementById('review-best-move');
   const lineEl = document.getElementById('review-engine-line');
 
   if (statusEl) statusEl.textContent = status || 'idle';
-  if (analysis) {
-    if (scoreEl) scoreEl.textContent = formatWhiteScore(analysis.whiteScore);
-    if (bestEl) bestEl.textContent = analysis.bestDisplay || '—';
-    if (lineEl) lineEl.textContent = analysis.lineDisplay || 'No engine line.';
+  if (scoreEl) scoreEl.textContent = currentAnalysis ? formatWhiteScore(currentAnalysis.whiteScore) : '—';
+  if (playedEl) playedEl.textContent = move ? moveDisplayText(move) : '—';
+  if (bestEl) bestEl.textContent = bestAnalysis?.bestDisplay || '—';
+  if (lineEl) lineEl.textContent = bestAnalysis?.lineDisplay || message || 'Engine analysis starts after review opens.';
+}
+
+function updateReviewAnalysisProgressUi(running = false, explicitMessage = '') {
+  const el = document.getElementById('review-analysis-progress');
+  if (!el) return;
+  if (!reviewState.active) {
+    el.textContent = '';
     return;
   }
-  if (scoreEl) scoreEl.textContent = score || '—';
-  if (bestEl) bestEl.textContent = '—';
-  if (lineEl) lineEl.textContent = message || 'Engine analysis starts after review opens.';
+  if (explicitMessage) {
+    el.textContent = explicitMessage;
+    return;
+  }
+  if (!reviewAnalysisAllowed()) {
+    el.textContent = 'Analysis unlocks after the game.';
+    return;
+  }
+  const total = countDistinctReviewPositions();
+  const done = countCachedReviewAnalyses();
+  reviewState.analysisProgress = { done, total, running: !!running };
+  if (!reviewState.analysisStarted) {
+    el.textContent = 'Analysis starts when review opens.';
+  } else if (done >= total && total > 0 && !running) {
+    el.textContent = 'Analysis complete.';
+  } else {
+    el.textContent = `Analyzing game: ${done} / ${total}`;
+  }
 }
 
 function updateReviewEvalBar(whiteScore) {
@@ -1932,11 +2145,13 @@ function formatWhiteScore(whiteScore) {
   return `${sign}${pawns.toFixed(1)}`;
 }
 
-function enrichReviewAnalysis(raw, pos) {
+function enrichReviewAnalysis(raw, pos, ply = null) {
   const bestUci = raw.bestmove && raw.bestmove !== '(none)' ? raw.bestmove : (raw.pv?.[0] || null);
   const whiteScore = normalizeScoreForWhite(raw.score, pos);
   return {
     ...raw,
+    ply,
+    bestUci,
     whiteScore,
     bestDisplay: bestUci ? formatUciMoveForPosition(bestUci, pos) : '—',
     lineDisplay: raw.pv?.length ? formatEngineLine(raw.pv, pos, 7) : 'No principal variation.'
@@ -1992,6 +2207,138 @@ function formatEngineLine(pv, startPos, maxMoves = 7) {
   return labels.join(' ');
 }
 
+function updateReviewEvalGraph() {
+  const wrap = document.getElementById('review-graph-wrap');
+  const svg = document.getElementById('review-eval-graph');
+  const label = document.getElementById('review-graph-label');
+  if (!wrap || !svg) return;
+  wrap.style.display = reviewState.active ? 'block' : 'none';
+  svg.innerHTML = '';
+  if (!reviewState.active || !reviewState.positions.length) {
+    if (label) label.textContent = '—';
+    return;
+  }
+
+  const w = 260;
+  const h = 58;
+  const n = reviewState.positions.length;
+  const make = (tag, attrs = {}) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    return el;
+  };
+
+  svg.appendChild(make('line', { class: 'review-graph-baseline', x1: 0, y1: h / 2, x2: w, y2: h / 2 }));
+
+  let path = '';
+  for (let ply = 0; ply < n; ply++) {
+    const analysis = analysisForPly(ply);
+    if (!analysis?.whiteScore) continue;
+    const x = n <= 1 ? w / 2 : (ply / (n - 1)) * w;
+    const y = h - (scoreToWhitePercent(analysis.whiteScore) / 100) * h;
+    path += `${path ? ' L' : 'M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  if (path) svg.appendChild(make('path', { class: 'review-graph-line', d: path }));
+
+  const current = analysisForPly(reviewState.index);
+  if (current?.whiteScore) {
+    const x = n <= 1 ? w / 2 : (reviewState.index / (n - 1)) * w;
+    const y = h - (scoreToWhitePercent(current.whiteScore) / 100) * h;
+    svg.appendChild(make('circle', { class: 'review-graph-current', cx: x.toFixed(2), cy: y.toFixed(2), r: 4.5 }));
+    if (label) label.textContent = formatWhiteScore(current.whiteScore);
+  } else if (label) {
+    const done = countCachedReviewAnalyses();
+    const total = countDistinctReviewPositions();
+    label.textContent = total ? `${done}/${total}` : '—';
+  }
+}
+
+function updateReviewArrows() {
+  const svg = document.getElementById('review-arrows');
+  if (!svg) return;
+  svg.innerHTML = '';
+  if (!reviewState.active) {
+    svg.style.display = 'none';
+    return;
+  }
+
+  const arrows = [];
+  const idx = reviewState.index;
+  if (idx > 0) {
+    const played = reviewState.moves[idx - 1];
+    if (played && Number.isFinite(played.from) && Number.isFinite(played.to)) {
+      arrows.push({ from: played.from, to: played.to, kind: 'played' });
+    }
+    const beforeAnalysis = analysisForPly(idx - 1);
+    const beforePos = reviewState.positions[idx - 1];
+    const best = uciToArrow(beforeAnalysis?.bestUci, beforePos);
+    if (best) arrows.push({ ...best, kind: 'best' });
+  } else {
+    const startAnalysis = analysisForPly(0);
+    const startPos = reviewState.positions[0];
+    const best = uciToArrow(startAnalysis?.bestUci, startPos);
+    if (best) arrows.push({ ...best, kind: 'best' });
+  }
+
+  if (!arrows.length) {
+    svg.style.display = 'none';
+    return;
+  }
+
+  svg.style.display = '';
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  defs.innerHTML = `
+    <marker id="review-arrow-played" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(232, 220, 200, 0.82)"></path>
+    </marker>
+    <marker id="review-arrow-best" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path>
+    </marker>`;
+  svg.appendChild(defs);
+
+  for (const arrow of arrows) drawReviewArrow(svg, arrow.from, arrow.to, arrow.kind);
+}
+
+function uciToArrow(uci, pos) {
+  if (!uci || !pos || !/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) return null;
+  const from = algToIdx(uci.slice(0, 2));
+  const to = algToIdx(uci.slice(2, 4));
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return { from, to };
+}
+
+function squareCenterForOverlay(idx) {
+  const file = idx % 8;
+  const rank = Math.floor(idx / 8);
+  const col = state.flipped ? 7 - file : file;
+  const row = state.flipped ? rank : 7 - rank;
+  const sq = 72;
+  return { x: col * sq + sq / 2, y: row * sq + sq / 2 };
+}
+
+function drawReviewArrow(svg, from, to, kind) {
+  if (from === to) return;
+  const a = squareCenterForOverlay(from);
+  const b = squareCenterForOverlay(to);
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const startPad = 15;
+  const endPad = 28;
+  const x1 = a.x + (dx / len) * startPad;
+  const y1 = a.y + (dy / len) * startPad;
+  const x2 = b.x - (dx / len) * endPad;
+  const y2 = b.y - (dy / len) * endPad;
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('class', `review-arrow-line ${kind}`);
+  line.setAttribute('x1', x1.toFixed(2));
+  line.setAttribute('y1', y1.toFixed(2));
+  line.setAttribute('x2', x2.toFixed(2));
+  line.setAttribute('y2', y2.toFixed(2));
+  line.setAttribute('marker-end', `url(#review-arrow-${kind})`);
+  svg.appendChild(line);
+}
+
 function setStatus(msg, alert = false) {
   const el = document.getElementById('status-text');
   if (!el) return;
@@ -2003,9 +2350,13 @@ function resetLocalState(statusText = 'New game started.') {
   stopReviewAnalysis();
   reviewAnalysisCache.clear();
   reviewState.active = false;
+  reviewState.analysisStarted = false;
+  reviewState.analysisProgress = { done: 0, total: 0, running: false };
   const reviewCard = document.getElementById('review-card');
   if (reviewCard) reviewCard.style.display = 'none';
   updateReviewEvalBar(null);
+  updateReviewEvalGraph();
+  updateReviewArrows();
   state.board = fenToBoard(START_FEN);
   state.turn = 'w';
   state.selected = null;

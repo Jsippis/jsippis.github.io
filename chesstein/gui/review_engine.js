@@ -118,8 +118,10 @@
     stop() {
       this.ticket++;
       if (this.currentSearch) {
-        clearTimeout(this.currentSearch.timer);
+        const search = this.currentSearch;
+        clearTimeout(search.timer);
         this.currentSearch = null;
+        try { search.reject(new Error('Analysis cancelled.')); } catch (_) {}
       }
       this.post('stop');
     }
@@ -144,8 +146,10 @@
       const ticket = ++this.ticket;
 
       if (this.currentSearch) {
-        clearTimeout(this.currentSearch.timer);
+        const previous = this.currentSearch;
+        clearTimeout(previous.timer);
         this.currentSearch = null;
+        try { previous.reject(new Error('Analysis cancelled.')); } catch (_) {}
       }
       this.post('stop');
       await this._readyCheck();
