@@ -126,6 +126,7 @@
     gap: 0;
     flex-shrink: 0;
     position: relative;
+    padding-right: 32px;
   }
 
 
@@ -477,6 +478,81 @@
     line-height: 1.45;
     word-break: break-word;
   }
+
+  .review-engine {
+    margin-top: 12px;
+    border: 1px solid rgba(201, 162, 39, 0.22);
+    border-radius: 6px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.10);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .review-engine-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .review-engine-row span { color: var(--muted); }
+  .review-engine-row strong { color: var(--text); text-align: right; }
+  .review-score {
+    margin-top: 8px;
+    font-size: 22px;
+    font-family: 'Fraunces', serif;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .review-engine-line {
+    margin-top: 6px;
+    color: var(--muted);
+    word-break: break-word;
+  }
+  .review-engine-note {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .review-engine-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .review-engine-actions button { padding: 7px 0; }
+  .review-eval-bar {
+    position: absolute;
+    left: calc(var(--sq) * 8 + 14px);
+    top: 42px;
+    width: 18px;
+    height: calc(var(--sq) * 8 + 4px);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    background: #181310;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    z-index: 4;
+  }
+  .review-eval-white {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 50%;
+    background: #e8dcc8;
+    transition: height 0.25s ease;
+  }
+  .review-eval-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 800;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    white-space: nowrap;
+    pointer-events: none;
+  }
   .move-san.review-current {
     background: rgba(201, 162, 39, 0.16);
     color: var(--accent);
@@ -544,6 +620,10 @@
 <div class="main">
   <div class="board-wrap">
     <div class="player-strip top" id="player-top"></div>
+    <div class="review-eval-bar" id="review-eval-bar" style="display:none;">
+      <div class="review-eval-white" id="review-eval-white"></div>
+      <div class="review-eval-label" id="review-eval-label">0.00</div>
+    </div>
     <div id="board"></div>
     <div class="file-labels">
       <div class="file-label">a</div><div class="file-label">b</div>
@@ -622,6 +702,16 @@
         <button onclick="reviewNext()">&gt;</button>
         <button onclick="reviewLast()">&gt;|</button>
       </div>
+      <div class="review-engine" id="review-engine-box">
+        <div class="review-engine-row"><span>Stockfish</span><strong id="review-engine-status">idle</strong></div>
+        <div class="review-score" id="review-score">—</div>
+        <div class="review-engine-row"><span>Best</span><strong id="review-best-move">—</strong></div>
+        <div class="review-engine-line" id="review-engine-line">Engine analysis starts after review opens.</div>
+        <div class="review-engine-actions">
+          <button onclick="requestReviewAnalysis(true)">analyze</button>
+        </div>
+        <div class="review-engine-note">Stockfish 18 lite runs locally in your browser after the game.</div>
+      </div>
       <div class="review-fen" id="review-fen"></div>
     </div>
   </div>
@@ -631,6 +721,7 @@
   <div class="promotion-box" id="promo-box"></div>
 </div>
 
+<script src="review_engine.js"></script>
 <script>
 const PIECE_ASSET_BASE = 'assets/pieces/cburnett/';
 const PIECE_IMAGES = {
@@ -711,6 +802,13 @@ let reviewState = {
   index: 0,
   missingUci: false
 };
+
+const REVIEW_ENGINE_DEPTH = 12;
+let reviewEngine = null;
+let reviewAnalysisSeq = 0;
+let reviewAnalysisTimer = null;
+let reviewAnalysisInFlightFen = null;
+const reviewAnalysisCache = new Map();
 
 const query = new URLSearchParams(window.location.search);
 const launchMode = query.get('mode') || 'bridge';
@@ -1646,9 +1744,11 @@ function enterReviewMode() {
 }
 
 function exitReviewMode() {
+  stopReviewAnalysis();
   reviewState.active = false;
   const card = document.getElementById('review-card');
   if (card) card.style.display = 'none';
+  updateReviewEvalBar(null);
   buildBoard();
   setStatus(state.gameOver ? 'Returned to final game position.' : 'Returned to live board.');
 }
@@ -1683,6 +1783,225 @@ function renderReviewPanel() {
       : `${side} to move after ${moveDisplayText(move)}${move?.uci ? ` (${move.uci})` : ''}.`;
   }
   if (fen) fen.textContent = pos.fen || positionToFen(pos);
+  renderReviewAnalysisPanel(pos);
+  scheduleReviewAnalysis();
+}
+
+function reviewAnalysisAllowed() {
+  if (!reviewState.active) return false;
+  if (!isOnlineGame()) return true;
+  return state.gameOver || state.roomStatus === 'finished';
+}
+
+function ensureReviewEngine() {
+  if (!window.ChessteinReviewEngine) {
+    throw new Error('Review engine loader is missing.');
+  }
+  if (!reviewEngine) {
+    reviewEngine = new window.ChessteinReviewEngine();
+  }
+  return reviewEngine.init();
+}
+
+function scheduleReviewAnalysis() {
+  if (!reviewState.active) return;
+  const pos = reviewState.positions[reviewState.index];
+  if (!pos) return;
+  const fen = pos.fen || positionToFen(pos);
+  if (!reviewAnalysisAllowed()) {
+    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.', score: null });
+    updateReviewEvalBar(null);
+    return;
+  }
+  const cached = reviewAnalysisCache.get(fen);
+  if (cached) {
+    setReviewEngineUi({ status: `depth ${cached.depth || '?'}`, analysis: cached });
+    updateReviewEvalBar(cached.whiteScore);
+    return;
+  }
+  if (reviewAnalysisInFlightFen === fen) return;
+  clearTimeout(reviewAnalysisTimer);
+  setReviewEngineUi({ status: 'queued', message: 'Waiting to analyze this position…', score: null });
+  updateReviewEvalBar(null);
+  reviewAnalysisTimer = setTimeout(() => requestReviewAnalysis(false), 280);
+}
+
+async function requestReviewAnalysis(force = false) {
+  if (!reviewState.active) return;
+  const pos = reviewState.positions[reviewState.index];
+  if (!pos) return;
+  if (!reviewAnalysisAllowed()) {
+    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.', score: null });
+    updateReviewEvalBar(null);
+    return;
+  }
+  const fen = pos.fen || positionToFen(pos);
+  if (!force && reviewAnalysisCache.has(fen)) {
+    const cached = reviewAnalysisCache.get(fen);
+    setReviewEngineUi({ status: `depth ${cached.depth || '?'}`, analysis: cached });
+    updateReviewEvalBar(cached.whiteScore);
+    return;
+  }
+  clearTimeout(reviewAnalysisTimer);
+  const seq = ++reviewAnalysisSeq;
+  reviewAnalysisInFlightFen = fen;
+  setReviewEngineUi({ status: 'starting', message: 'Starting Stockfish WASM…', score: null });
+  updateReviewEvalBar(null);
+
+  try {
+    const engine = await ensureReviewEngine();
+    if (seq !== reviewAnalysisSeq || !reviewState.active) return;
+    setReviewEngineUi({ status: 'analyzing', message: `Analyzing to depth ${REVIEW_ENGINE_DEPTH}…`, score: null });
+    const raw = await engine.analyzeFen(fen, { depth: REVIEW_ENGINE_DEPTH });
+    if (seq !== reviewAnalysisSeq || !reviewState.active) return;
+    const currentPos = reviewState.positions[reviewState.index];
+    if (!currentPos || (currentPos.fen || positionToFen(currentPos)) !== fen) return;
+    const analysis = enrichReviewAnalysis(raw, currentPos);
+    reviewAnalysisCache.set(fen, analysis);
+    setReviewEngineUi({ status: `depth ${analysis.depth || REVIEW_ENGINE_DEPTH}`, analysis });
+    updateReviewEvalBar(analysis.whiteScore);
+  } catch (error) {
+    if (seq !== reviewAnalysisSeq || !reviewState.active) return;
+    setReviewEngineUi({ status: 'unavailable', message: error?.message || 'Stockfish analysis failed.', score: null });
+    updateReviewEvalBar(null);
+  } finally {
+    if (seq === reviewAnalysisSeq) reviewAnalysisInFlightFen = null;
+  }
+}
+
+function stopReviewAnalysis() {
+  clearTimeout(reviewAnalysisTimer);
+  reviewAnalysisSeq++;
+  reviewAnalysisInFlightFen = null;
+  if (reviewEngine) reviewEngine.stop();
+}
+
+function renderReviewAnalysisPanel(pos) {
+  const bar = document.getElementById('review-eval-bar');
+  if (bar) bar.style.display = reviewState.active ? '' : 'none';
+  if (!reviewState.active || !pos) return;
+  const cached = reviewAnalysisCache.get(pos.fen || positionToFen(pos));
+  if (cached) {
+    setReviewEngineUi({ status: `depth ${cached.depth || '?'}`, analysis: cached });
+    updateReviewEvalBar(cached.whiteScore);
+  } else if (!reviewAnalysisAllowed()) {
+    setReviewEngineUi({ status: 'locked', message: 'Engine review unlocks after the game is finished.', score: null });
+    updateReviewEvalBar(null);
+  }
+}
+
+function setReviewEngineUi({ status, analysis = null, message = '', score = null }) {
+  const statusEl = document.getElementById('review-engine-status');
+  const scoreEl = document.getElementById('review-score');
+  const bestEl = document.getElementById('review-best-move');
+  const lineEl = document.getElementById('review-engine-line');
+
+  if (statusEl) statusEl.textContent = status || 'idle';
+  if (analysis) {
+    if (scoreEl) scoreEl.textContent = formatWhiteScore(analysis.whiteScore);
+    if (bestEl) bestEl.textContent = analysis.bestDisplay || '—';
+    if (lineEl) lineEl.textContent = analysis.lineDisplay || 'No engine line.';
+    return;
+  }
+  if (scoreEl) scoreEl.textContent = score || '—';
+  if (bestEl) bestEl.textContent = '—';
+  if (lineEl) lineEl.textContent = message || 'Engine analysis starts after review opens.';
+}
+
+function updateReviewEvalBar(whiteScore) {
+  const bar = document.getElementById('review-eval-bar');
+  const white = document.getElementById('review-eval-white');
+  const label = document.getElementById('review-eval-label');
+  if (!bar || !white || !label) return;
+  bar.style.display = reviewState.active ? '' : 'none';
+  const percent = scoreToWhitePercent(whiteScore);
+  white.style.height = `${percent}%`;
+  label.textContent = whiteScore ? formatWhiteScore(whiteScore) : '0.00';
+}
+
+function scoreToWhitePercent(whiteScore) {
+  if (!whiteScore) return 50;
+  if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 97 : 3;
+  const cp = Math.max(-900, Math.min(900, Number(whiteScore.cp || 0)));
+  return Math.max(2, Math.min(98, 100 / (1 + Math.exp(-cp / 170))));
+}
+
+function normalizeScoreForWhite(score, pos) {
+  if (!score) return null;
+  const sign = pos.turn === 'w' ? 1 : -1;
+  if (score.type === 'mate') return { type: 'mate', mate: score.value * sign };
+  return { type: 'cp', cp: score.value * sign };
+}
+
+function formatWhiteScore(whiteScore) {
+  if (!whiteScore) return '—';
+  if (whiteScore.type === 'mate') {
+    const sign = whiteScore.mate >= 0 ? '+' : '-';
+    return `${sign}M${Math.abs(whiteScore.mate)}`;
+  }
+  const pawns = Number(whiteScore.cp || 0) / 100;
+  const sign = pawns >= 0 ? '+' : '';
+  return `${sign}${pawns.toFixed(2)}`;
+}
+
+function enrichReviewAnalysis(raw, pos) {
+  const bestUci = raw.bestmove && raw.bestmove !== '(none)' ? raw.bestmove : (raw.pv?.[0] || null);
+  const whiteScore = normalizeScoreForWhite(raw.score, pos);
+  return {
+    ...raw,
+    whiteScore,
+    bestDisplay: bestUci ? formatUciMoveForPosition(bestUci, pos) : '—',
+    lineDisplay: raw.pv?.length ? formatEngineLine(raw.pv, pos, 7) : 'No principal variation.'
+  };
+}
+
+function formatUciMoveForPosition(uci, pos) {
+  if (!uci || !/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) return uci || '';
+  const from = algToIdx(uci.slice(0, 2));
+  const to = algToIdx(uci.slice(2, 4));
+  const promotion = uci.length === 5 ? uci[4].toUpperCase() : '';
+  const piece = pos.board[from];
+  if (!piece) return uci;
+  const type = piece[1];
+  const toAlg = idxToAlg(to);
+  const fromAlg = idxToAlg(from);
+  if (type === 'K' && Math.abs(to - from) === 2) return to > from ? 'O-O' : 'O-O-O';
+  const capture = !!pos.board[to] || (type === 'P' && pos.enPassant === toAlg && fromAlg[0] !== toAlg[0]);
+  if (type === 'P') {
+    return `${capture ? `${fromAlg[0]}x` : ''}${toAlg}${promotion ? `=${promotion}` : ''}`;
+  }
+  return `${type}${capture ? 'x' : ''}${toAlg}`;
+}
+
+function formatEngineLine(pv, startPos, maxMoves = 7) {
+  const pos = clonePosition(startPos);
+  const labels = [];
+  for (const uci of pv.slice(0, maxMoves)) {
+    if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) continue;
+    const from = algToIdx(uci.slice(0, 2));
+    const to = algToIdx(uci.slice(2, 4));
+    if (!pos.board[from]) break;
+    const promotion = uci.length === 5 ? uci[4] : null;
+    labels.push(formatUciMoveForPosition(uci, pos));
+    const result = applyMoveToBoard(pos.board, {
+      from,
+      to,
+      promotion,
+      castling: pos.castling,
+      enPassant: pos.enPassant,
+      halfmove: pos.halfmove,
+      fullmove: pos.fullmove
+    });
+    pos.board = result.board;
+    pos.turn = pos.turn === 'w' ? 'b' : 'w';
+    pos.castling = result.castling;
+    pos.enPassant = result.enPassant;
+    pos.halfmove = result.halfmove;
+    pos.fullmove = result.fullmove;
+    pos.fen = positionToFen(pos);
+    pos.lastMove = [from, to];
+  }
+  return labels.join(' ');
 }
 
 function setStatus(msg, alert = false) {
@@ -1692,9 +2011,12 @@ function setStatus(msg, alert = false) {
 }
 
 function resetLocalState(statusText = 'New game started.') {
+  stopReviewAnalysis();
+  reviewAnalysisCache.clear();
   reviewState.active = false;
   const reviewCard = document.getElementById('review-card');
   if (reviewCard) reviewCard.style.display = 'none';
+  updateReviewEvalBar(null);
   state.board = fenToBoard(START_FEN);
   state.turn = 'w';
   state.selected = null;

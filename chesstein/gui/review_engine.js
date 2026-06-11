@@ -1,0 +1,215 @@
+(function () {
+  'use strict';
+
+  const DEFAULT_ENGINE_SCRIPT = 'vendor/stockfish/stockfish-18-lite-single.js';
+  const DEFAULT_ENGINE_WASM = 'vendor/stockfish/stockfish-18-lite-single.wasm';
+  const READY_TIMEOUT_MS = 12000;
+  const SEARCH_TIMEOUT_MS = 20000;
+
+  function absoluteUrl(path) {
+    return new URL(path, window.location.href).href;
+  }
+
+  class StockfishReviewEngine {
+    constructor(options = {}) {
+      this.scriptPath = options.scriptPath || DEFAULT_ENGINE_SCRIPT;
+      this.wasmPath = options.wasmPath || DEFAULT_ENGINE_WASM;
+      this.worker = null;
+      this.readyPromise = null;
+      this.readyResolved = false;
+      this.readyRejected = false;
+      this.waiters = [];
+      this.currentSearch = null;
+      this.ticket = 0;
+      this.lastLines = [];
+    }
+
+    isSupported() {
+      return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined';
+    }
+
+    async init() {
+      if (!this.isSupported()) {
+        throw new Error('This browser does not support Web Workers and WebAssembly.');
+      }
+      if (this.readyPromise) return this.readyPromise;
+
+      this.readyPromise = new Promise((resolve, reject) => {
+        const scriptUrl = absoluteUrl(this.scriptPath);
+        const wasmUrl = absoluteUrl(this.wasmPath);
+        const workerUrl = `${scriptUrl}#${encodeURIComponent(wasmUrl)},worker`;
+        let timer = null;
+
+        const fail = (error) => {
+          if (this.readyResolved || this.readyRejected) return;
+          this.readyRejected = true;
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        };
+
+        try {
+          this.worker = new Worker(workerUrl);
+        } catch (error) {
+          fail(error);
+          return;
+        }
+
+        timer = setTimeout(() => {
+          fail(new Error('Stockfish WASM did not become ready.'));
+        }, READY_TIMEOUT_MS);
+
+        this.worker.onerror = (event) => {
+          fail(new Error(event.message || 'Stockfish worker failed to load.'));
+        };
+
+        this.worker.onmessage = (event) => {
+          const line = String(event.data || '').trim();
+          if (!line) return;
+          this._handleLine(line);
+          if (line === 'uciok') {
+            this.post('isready');
+          } else if (line === 'readyok' && !this.readyResolved) {
+            this.readyResolved = true;
+            clearTimeout(timer);
+            resolve(this);
+          }
+        };
+
+        this.post('uci');
+      });
+
+      return this.readyPromise;
+    }
+
+    post(command) {
+      if (!this.worker) return;
+      this.worker.postMessage(command);
+    }
+
+    stop() {
+      this.ticket++;
+      if (this.currentSearch) {
+        clearTimeout(this.currentSearch.timer);
+        this.currentSearch = null;
+      }
+      this.post('stop');
+    }
+
+    dispose() {
+      this.stop();
+      if (this.worker) {
+        try { this.post('quit'); } catch (_) {}
+        try { this.worker.terminate(); } catch (_) {}
+      }
+      this.worker = null;
+      this.readyPromise = null;
+      this.readyResolved = false;
+      this.readyRejected = false;
+      this.waiters = [];
+    }
+
+    async analyzeFen(fen, options = {}) {
+      await this.init();
+
+      const depth = Number(options.depth || 12);
+      const ticket = ++this.ticket;
+
+      if (this.currentSearch) {
+        clearTimeout(this.currentSearch.timer);
+        this.currentSearch = null;
+      }
+      this.post('stop');
+      await this._readyCheck();
+      if (ticket !== this.ticket) throw new Error('Analysis cancelled.');
+
+      return new Promise((resolve, reject) => {
+        const result = {
+          fen,
+          depth: 0,
+          score: null,
+          pv: [],
+          bestmove: null,
+          rawLines: []
+        };
+        const timer = setTimeout(() => {
+          if (this.currentSearch && this.currentSearch.ticket === ticket) {
+            this.currentSearch = null;
+            this.post('stop');
+          }
+          reject(new Error('Stockfish analysis timed out.'));
+        }, Number(options.timeoutMs || SEARCH_TIMEOUT_MS));
+
+        this.currentSearch = { ticket, resolve, reject, result, timer };
+        this.post(`position fen ${fen}`);
+        this.post(`go depth ${Math.max(1, Math.min(30, depth))}`);
+      });
+    }
+
+    _readyCheck() {
+      return new Promise((resolve, reject) => {
+        const waiter = {
+          predicate: (line) => line === 'readyok',
+          resolve,
+          reject,
+          timer: setTimeout(() => {
+            this.waiters = this.waiters.filter((entry) => entry !== waiter);
+            reject(new Error('Stockfish ready check timed out.'));
+          }, READY_TIMEOUT_MS)
+        };
+        this.waiters.push(waiter);
+        this.post('isready');
+      });
+    }
+
+    _handleLine(line) {
+      this.lastLines.push(line);
+      if (this.lastLines.length > 80) this.lastLines.shift();
+
+      for (const waiter of [...this.waiters]) {
+        if (waiter.predicate(line)) {
+          clearTimeout(waiter.timer);
+          this.waiters = this.waiters.filter((entry) => entry !== waiter);
+          waiter.resolve(line);
+        }
+      }
+
+      const search = this.currentSearch;
+      if (!search) return;
+      search.result.rawLines.push(line);
+      if (search.result.rawLines.length > 50) search.result.rawLines.shift();
+
+      if (line.startsWith('info ')) {
+        this._parseInfoLine(line, search.result);
+        return;
+      }
+
+      if (line.startsWith('bestmove ')) {
+        const parts = line.split(/\s+/);
+        search.result.bestmove = parts[1] || null;
+        clearTimeout(search.timer);
+        this.currentSearch = null;
+        search.resolve({ ...search.result });
+      }
+    }
+
+    _parseInfoLine(line, result) {
+      const depthMatch = line.match(/\bdepth\s+(\d+)/);
+      if (depthMatch) result.depth = Number(depthMatch[1]);
+
+      const scoreMatch = line.match(/\bscore\s+(cp|mate)\s+(-?\d+)/);
+      if (scoreMatch) {
+        result.score = {
+          type: scoreMatch[1],
+          value: Number(scoreMatch[2])
+        };
+      }
+
+      const pvMatch = line.match(/\bpv\s+(.+)$/);
+      if (pvMatch) {
+        result.pv = pvMatch[1].trim().split(/\s+/).filter(Boolean);
+      }
+    }
+  }
+
+  window.ChessteinReviewEngine = StockfishReviewEngine;
+})();
