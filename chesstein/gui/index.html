@@ -25,18 +25,18 @@
     --ws-ok: #4caf73;
     --ws-err: #e05a4e;
     --ws-off: #8a7a6a;
-    --strip-h: 42px;
-    --cap-row-h: 24px;
+    --strip-h: 34px;
+    --cap-row-h: 16px;
     --board-top: calc(var(--cap-row-h) + var(--strip-h));
-    --sq: clamp(48px, min(calc((100vh - 178px) / 8), calc((100vw - 420px) / 8)), 92px);
+    --sq: clamp(48px, min(calc((100dvh - 160px) / 8), calc((100vw - 360px) / 8)), 96px);
   }
 
   body {
     background: var(--bg);
     color: var(--text);
     font-family: 'IBM Plex Mono', monospace;
-    height: 100vh;
-    min-height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -46,11 +46,11 @@
   }
 
   body.review-active {
-    --sq: clamp(42px, min(calc((100vh - 198px) / 8), calc((100vw - 640px) / 8)), 76px);
+    --sq: clamp(42px, min(calc((100dvh - 176px) / 8), calc((100vw - 700px) / 8)), 78px);
   }
 
   header {
-    width: min(100%, 1320px);
+    width: min(100%, 1420px);
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -67,8 +67,52 @@
   .header-right {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 10px;
+    min-width: 0;
   }
+
+
+  .game-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: min(760px, 54vw);
+  }
+  .game-strip .disconnect-banner,
+  .game-strip .draw-offer-panel,
+  .game-strip .game-over-panel {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+  .game-strip .disconnect-banner { display: none; }
+  .game-strip .disconnect-banner.show { display: block; }
+  .game-strip .game-actions,
+  .game-strip .mini-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+  }
+  .game-strip .game-actions button,
+  .game-strip .mini-actions button {
+    flex: none;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    line-height: 1;
+  }
+  .game-strip .game-over-panel strong,
+  .game-strip .draw-offer-panel strong {
+    margin-right: 8px;
+    color: var(--text);
+  }
+  .game-strip .muted { display: inline; margin: 0 8px 0 0; font-size: 10px; color: var(--muted); }
 
   .tiny-action {
     flex: none;
@@ -138,16 +182,20 @@
 
   .main {
     display: grid;
-    grid-template-columns: max-content minmax(260px, 340px);
-    gap: clamp(14px, 2vw, 28px);
+    grid-template-columns: max-content minmax(260px, 320px);
+    gap: clamp(12px, 1.6vw, 22px);
     align-items: flex-start;
-    width: min(100%, 1500px);
+    justify-content: center;
+    width: fit-content;
+    max-width: 100%;
     flex: 1 1 auto;
     min-height: 0;
   }
 
   body.review-active .main {
-    grid-template-columns: max-content minmax(430px, 1fr);
+    grid-template-columns: max-content minmax(430px, 760px);
+    width: min(100%, 1460px);
+    justify-content: center;
   }
 
   .board-wrap {
@@ -157,8 +205,8 @@
     gap: 0;
     flex-shrink: 0;
     position: relative;
-    margin-left: 22px;
-    padding-right: 32px;
+    margin-left: 20px;
+    padding-right: 28px;
   }
 
 
@@ -173,7 +221,7 @@
     border: 1px solid var(--border);
     background: rgba(34, 30, 26, 0.92);
     color: var(--text);
-    padding: 9px 12px;
+    padding: 7px 10px;
     font-size: 12px;
   }
   .capture-row {
@@ -183,8 +231,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 2px;
-    padding: 1px 4px;
+    gap: 1px;
+    padding: 0 4px;
     overflow: hidden;
   }
   .capture-row:empty::after {
@@ -310,9 +358,9 @@
   .panel {
     display: grid;
     grid-template-columns: 1fr;
-    gap: clamp(8px, 1.1vh, 12px);
+    gap: clamp(8px, 1vh, 10px);
     min-width: 0;
-    max-height: 100%;
+    max-height: calc(100dvh - 74px);
     overflow-y: auto;
     padding-right: 2px;
     align-content: start;
@@ -321,8 +369,9 @@
   }
 
   body.review-active .panel {
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: clamp(10px, 1.4vh, 16px);
+    grid-template-columns: 1fr;
+    gap: clamp(10px, 1.2vh, 14px);
+    max-height: calc(100dvh - 74px);
   }
 
   .move-card, .review-card { grid-column: 1 / -1; }
@@ -368,7 +417,7 @@
   #status-text.alert { color: var(--accent); }
 
   .move-history {
-    max-height: clamp(110px, 23vh, 240px);
+    max-height: clamp(120px, 28dvh, 300px);
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
@@ -401,8 +450,8 @@
   }
 
   .captured-piece {
-    width: 20px;
-    height: 20px;
+    width: 17px;
+    height: 17px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -710,12 +759,12 @@
 
   @media (max-width: 1040px) {
     :root {
-      --sq: clamp(44px, min(calc((100vh - 180px) / 8), calc((100vw - 380px) / 8)), 78px);
+      --sq: clamp(44px, min(calc((100dvh - 154px) / 8), calc((100vw - 340px) / 8)), 82px);
     }
     body.review-active {
-      --sq: clamp(42px, min(calc((100vh - 200px) / 8), calc((100vw - 520px) / 8)), 70px);
+      --sq: clamp(40px, min(calc((100dvh - 174px) / 8), calc((100vw - 560px) / 8)), 72px);
     }
-    .main { grid-template-columns: max-content minmax(260px, 330px); }
+    .main { grid-template-columns: max-content minmax(240px, 300px); }
     body.review-active .main { grid-template-columns: max-content minmax(360px, 1fr); }
     .panel { grid-template-columns: 1fr; }
   }
@@ -723,11 +772,12 @@
   @media (max-width: 820px) {
     :root { --sq: clamp(36px, calc((100vw - 78px) / 8), 64px); }
     body, body.review-active { --sq: clamp(36px, calc((100vw - 78px) / 8), 64px); }
-    body { height: auto; min-height: 100vh; overflow: auto; padding: 10px; }
+    body { height: auto; min-height: 100dvh; overflow: auto; padding: 10px; }
     header { align-items: flex-start; gap: 10px; flex-direction: column; margin-bottom: 10px; }
     .header-left { flex-wrap: wrap; gap: 10px; }
     .header-right { width: 100%; justify-content: space-between; }
-    .main { grid-template-columns: 1fr; gap: 12px; }
+    .game-strip { max-width: 100%; flex-wrap: wrap; }
+    .main { grid-template-columns: 1fr; gap: 12px; width: 100%; }
     .board-wrap { justify-self: center; margin-left: 22px; padding-right: 30px; }
     .panel {
       width: 100%;
@@ -763,6 +813,15 @@
     <div class="session-badge" id="session-badge">bridge</div>
   </div>
   <div class="header-right">
+    <div class="game-strip" id="game-card" style="display:none;">
+      <div class="disconnect-banner" id="online-disconnect-banner"><strong>Opponent disconnected.</strong></div>
+      <div class="game-actions" id="online-actions" style="display:none;">
+        <button onclick="offerDraw()">offer draw</button>
+        <button class="danger" onclick="resignGame()">resign</button>
+      </div>
+      <div class="draw-offer-panel" id="draw-offer-panel" style="display:none;"></div>
+      <div class="game-over-panel" id="online-game-over" style="display:none;"></div>
+    </div>
     <button class="tiny-action" onclick="flipBoard()" title="Flip board">flip</button>
     <div id="ws-status">
       <div id="ws-dot"></div>
@@ -798,18 +857,6 @@
     <div id="status-text" style="display:none;"></div>
     <div id="turn-text" style="display:none;"></div>
     <div id="turn-dot" style="display:none;"></div>
-
-    <div class="card" id="game-card" style="display:none;">
-      <div class="card-title">game</div>
-      <div class="disconnect-banner" id="online-disconnect-banner"><strong>Opponent disconnected.</strong><br>Moves are paused until they reconnect or leave.</div>
-      <div class="game-actions" id="online-actions" style="display:none;">
-        <button onclick="offerDraw()">offer draw</button>
-        <button class="danger" onclick="resignGame()">resign</button>
-      </div>
-      <div class="draw-offer-panel" id="draw-offer-panel" style="display:none;"></div>
-      <div class="game-over-panel" id="online-game-over" style="display:none;"></div>
-    </div>
-
 
     <div class="card move-card">
       <div class="card-title">move history</div>
@@ -1017,8 +1064,6 @@ function applyLaunchParams() {
   if (isOnlineGame()) {
     state.playerColor = launchColor || null;
     state.viewColor = launchViewColor || (launchColor === 'black' || launchColor === 'white' ? launchColor : null);
-    const gameCard = document.getElementById('game-card');
-    if (gameCard) gameCard.style.display = '';
     const newGameBtn = document.getElementById('new-game-btn');
     if (newGameBtn) newGameBtn.style.display = 'none';
     maybeAutoFlipForOnline();
@@ -2746,17 +2791,27 @@ function applyOnlinePresence(room) {
 function updateOnlineMeta(room = {}) {
   const gameCard = document.getElementById('game-card');
   const status = room.status || state.roomStatus || '—';
-  if (gameCard && isOnlineGame()) gameCard.style.display = '';
 
   const disconnectBanner = document.getElementById('online-disconnect-banner');
   const disconnectedDuringGame = status === 'active' && !state.gameOver && !state.opponentConnected;
   if (disconnectBanner) disconnectBanner.classList.toggle('show', disconnectedDuringGame);
 
   const actions = document.getElementById('online-actions');
-  if (actions) actions.style.display = status === 'active' && !state.gameOver && isOnlinePlayer() ? '' : 'none';
+  const showActions = status === 'active' && !state.gameOver && isOnlinePlayer();
+  if (actions) actions.style.display = showActions ? '' : 'none';
 
   renderDrawOfferPanel();
   renderOnlineGameOverPanel();
+
+  const drawPanel = document.getElementById('draw-offer-panel');
+  const gameOverPanel = document.getElementById('online-game-over');
+  const showGameStrip = isOnlineGame() && (
+    disconnectedDuringGame ||
+    showActions ||
+    (drawPanel && drawPanel.style.display !== 'none') ||
+    (gameOverPanel && gameOverPanel.style.display !== 'none')
+  );
+  if (gameCard) gameCard.style.display = showGameStrip ? '' : 'none';
 }
 
 function capitalize(value) {
@@ -2846,12 +2901,11 @@ function renderDrawOfferPanel() {
   }
 
   if (offerBy === state.playerColor) {
-    panel.innerHTML = `<strong>Draw offer sent</strong><div class="muted">Waiting for your opponent to accept or decline.</div>`;
+    panel.innerHTML = `<strong>Draw offer sent</strong><span class="muted">Waiting.</span>`;
     return;
   }
 
-  panel.innerHTML = `<strong>Opponent offered a draw</strong>
-    <div class="muted">Accept to end the game as ½–½, or decline to keep playing.</div>
+  panel.innerHTML = `<strong>Draw offer</strong>
     <div class="mini-actions">
       <button onclick="acceptDraw()">accept</button>
       <button onclick="declineDraw()">decline</button>
@@ -2871,24 +2925,22 @@ function renderOnlineGameOverPanel() {
   const offerBy = state.rematchOfferBy;
   let rematchHtml = '';
   if (offerBy && offerBy === state.playerColor) {
-    rematchHtml = `<div class="muted">Rematch requested. Waiting for your opponent to accept.</div>`;
+    rematchHtml = `<span class="muted">Rematch requested.</span><div class="mini-actions"><button onclick="enterReviewMode()">review</button></div>`;
   } else if (offerBy && offerBy !== state.playerColor) {
-    rematchHtml = `<div class="muted">Your opponent wants a rematch.</div>
+    rematchHtml = `<span class="muted">Rematch?</span>
       <div class="mini-actions">
-        <button onclick="acceptRematch()">accept rematch</button>
+        <button onclick="acceptRematch()">accept</button>
         <button onclick="declineRematch()">decline</button>
+        <button onclick="enterReviewMode()">review</button>
       </div>`;
   } else {
     rematchHtml = `<div class="mini-actions">
       <button onclick="requestRematch()">rematch</button>
       <button onclick="enterReviewMode()">review</button>
-      <button onclick="backToLobby()">back to lobby</button>
     </div>`;
   }
 
-  panel.innerHTML = `<strong>${escapeHtml(formatGameOverText(state.result, state.endReason))}</strong>
-    ${rematchHtml}
-    ${offerBy ? '<div class="mini-actions"><button onclick="enterReviewMode()">review</button><button onclick="backToLobby()">back to lobby</button></div>' : ''}`;
+  panel.innerHTML = `<strong>${escapeHtml(formatGameOverText(state.result, state.endReason))}</strong>${rematchHtml}`;
 }
 
 function formatGameOverText(result, reason) {
