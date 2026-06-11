@@ -25,7 +25,8 @@
     --ws-ok: #4caf73;
     --ws-err: #e05a4e;
     --ws-off: #8a7a6a;
-    --sq: 72px;
+    --strip-h: 42px;
+    --sq: clamp(42px, min(calc((100vh - 170px) / 8), calc((100vw - 520px) / 8)), 76px);
   }
 
   body {
@@ -36,17 +37,16 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 24px 16px;
+    padding: clamp(10px, 1.8vh, 18px) clamp(10px, 1.8vw, 18px);
     gap: 0;
   }
 
   header {
-    width: 100%;
-    max-width: 900px;
+    width: min(100%, 1320px);
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    margin-bottom: 28px;
+    margin-bottom: clamp(10px, 1.8vh, 18px);
   }
 
   .header-left {
@@ -128,11 +128,11 @@
   #ws-dot.err { background: var(--ws-err); }
 
   .main {
-    display: flex;
-    gap: 20px;
+    display: grid;
+    grid-template-columns: max-content minmax(310px, 1fr);
+    gap: clamp(14px, 2vw, 28px);
     align-items: flex-start;
-    width: 100%;
-    max-width: 900px;
+    width: min(100%, 1320px);
   }
 
   .board-wrap {
@@ -142,13 +142,15 @@
     gap: 0;
     flex-shrink: 0;
     position: relative;
+    margin-left: 22px;
     padding-right: 32px;
   }
 
 
   .player-strip {
     width: calc(var(--sq) * 8 + 4px);
-    min-height: 42px;
+    height: var(--strip-h);
+    min-height: var(--strip-h);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -196,7 +198,7 @@
 
   .file-labels {
     display: flex;
-    margin-left: 22px;
+    margin-left: 0;
     margin-top: 4px;
   }
 
@@ -274,18 +276,24 @@
   }
 
   .panel {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    min-width: 200px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: clamp(10px, 1.4vh, 16px);
+    min-width: 0;
+    max-height: calc(100vh - 72px);
+    overflow-y: auto;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
   }
+
+  .move-card, .review-card { grid-column: 1 / -1; }
 
   .card {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 16px;
+    padding: clamp(12px, 1.3vw, 16px);
   }
 
   .card-title {
@@ -322,7 +330,7 @@
   #status-text.alert { color: var(--accent); }
 
   .move-history {
-    max-height: 280px;
+    max-height: clamp(150px, 24vh, 280px);
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
@@ -527,7 +535,7 @@
   .review-arrows {
     position: absolute;
     left: 2px;
-    top: calc(42px + 2px);
+    top: calc(var(--strip-h) + 2px);
     width: calc(var(--sq) * 8);
     height: calc(var(--sq) * 8);
     pointer-events: none;
@@ -536,13 +544,12 @@
   }
   .review-arrow-line {
     fill: none;
-    stroke-width: 9;
+    stroke-width: 7;
     stroke-linecap: round;
     stroke-linejoin: round;
     opacity: 0.86;
     filter: drop-shadow(0 2px 3px rgba(0,0,0,0.55));
   }
-  .review-arrow-line.played { stroke: rgba(232, 220, 200, 0.82); }
   .review-arrow-line.best { stroke: var(--accent); }
   .review-engine {
     margin-top: 12px;
@@ -582,7 +589,7 @@
   .review-eval-bar {
     position: absolute;
     left: calc(var(--sq) * 8 + 14px);
-    top: 42px;
+    top: var(--strip-h);
     width: 18px;
     height: calc(var(--sq) * 8 + 4px);
     border: 1px solid var(--border);
@@ -663,9 +670,44 @@
     line-height: 1;
   }
 
-  @media (max-width: 760px) {
-    header { align-items: flex-start; gap: 12px; flex-direction: column; }
-    .header-left { flex-wrap: wrap; }
+  @media (max-width: 1040px) {
+    :root {
+      --sq: clamp(44px, min(calc((100vh - 170px) / 8), calc((100vw - 430px) / 8)), 70px);
+    }
+    .main { grid-template-columns: max-content minmax(280px, 1fr); }
+    .panel { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 820px) {
+    :root { --sq: clamp(36px, calc((100vw - 78px) / 8), 64px); }
+    body { padding: 10px; }
+    header { align-items: flex-start; gap: 10px; flex-direction: column; margin-bottom: 10px; }
+    .header-left { flex-wrap: wrap; gap: 10px; }
+    .header-right { width: 100%; justify-content: space-between; }
+    .main { grid-template-columns: 1fr; gap: 12px; }
+    .board-wrap { justify-self: center; margin-left: 22px; padding-right: 30px; }
+    .panel {
+      width: 100%;
+      max-height: none;
+      overflow: visible;
+      grid-template-columns: 1fr;
+    }
+    .player-strip { padding: 8px 10px; font-size: 11px; }
+    .player-clock { font-size: 16px; min-width: 60px; }
+    .move-history { max-height: 220px; }
+  }
+
+  @media (max-width: 460px) {
+    :root { --strip-h: 38px; --sq: clamp(32px, calc((100vw - 66px) / 8), 46px); }
+    .logo { font-size: 24px; }
+    .home-link, .session-badge { font-size: 10px; }
+    .board-wrap { margin-left: 18px; padding-right: 26px; }
+    .rank-label { width: 18px; left: -18px !important; }
+    .review-eval-bar { width: 16px; left: calc(var(--sq) * 8 + 10px); }
+    .review-eval-label { font-size: 9px; padding: 2px 4px; }
+    .card { padding: 12px; }
+    .review-controls { gap: 5px; }
+    button { font-size: 10px; }
   }
 </style>
 </head>
@@ -723,14 +765,14 @@
       <div class="game-over-panel" id="online-game-over" style="display:none;"></div>
     </div>
 
-    <div class="card">
+    <div class="card captured-card">
       <div class="card-title">captured</div>
       <div class="captures" id="captures-white"></div>
       <div style="height:6px;"></div>
       <div class="captures" id="captures-black"></div>
     </div>
 
-    <div class="card">
+    <div class="card move-card">
       <div class="card-title">move history</div>
       <div class="move-history" id="move-history"></div>
       <div class="review-graph-wrap" id="review-graph-wrap">
@@ -1013,7 +1055,8 @@ function buildBoard() {
   for (const rank of ranks) {
     const label = document.createElement('div');
     label.className = 'rank-label';
-    label.style.cssText = `position:absolute; left:-22px; top:${(state.flipped ? rank : 7-rank)*72}px; height:72px; display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted);`;
+    const visualRow = state.flipped ? rank : 7 - rank;
+    label.style.cssText = `position:absolute; left:-22px; top:calc(${visualRow} * var(--sq) + var(--strip-h)); height:var(--sq); display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted);`;
     label.textContent = rank + 1;
     rankLabelWrap.appendChild(label);
   }
@@ -2265,10 +2308,6 @@ function updateReviewArrows() {
   const arrows = [];
   const idx = reviewState.index;
   if (idx > 0) {
-    const played = reviewState.moves[idx - 1];
-    if (played && Number.isFinite(played.from) && Number.isFinite(played.to)) {
-      arrows.push({ from: played.from, to: played.to, kind: 'played' });
-    }
     const beforeAnalysis = analysisForPly(idx - 1);
     const beforePos = reviewState.positions[idx - 1];
     const best = uciToArrow(beforeAnalysis?.bestUci, beforePos);
@@ -2288,11 +2327,8 @@ function updateReviewArrows() {
   svg.style.display = '';
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
   defs.innerHTML = `
-    <marker id="review-arrow-played" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(232, 220, 200, 0.82)"></path>
-    </marker>
-    <marker id="review-arrow-best" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path>
+    <marker id="review-arrow-best" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 6 3 L 0 6 z" fill="var(--accent)"></path>
     </marker>`;
   svg.appendChild(defs);
 
@@ -2324,7 +2360,7 @@ function drawReviewArrow(svg, from, to, kind) {
   const dy = b.y - a.y;
   const len = Math.hypot(dx, dy) || 1;
   const startPad = 15;
-  const endPad = 28;
+  const endPad = 20;
   const x1 = a.x + (dx / len) * startPad;
   const y1 = a.y + (dy / len) * startPad;
   const x2 = b.x - (dx / len) * endPad;
