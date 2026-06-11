@@ -26,14 +26,18 @@
     --ws-err: #e05a4e;
     --ws-off: #8a7a6a;
     --strip-h: 42px;
-    --sq: clamp(42px, min(calc((100vh - 170px) / 8), calc((100vw - 520px) / 8)), 76px);
+    --cap-row-h: 24px;
+    --board-top: calc(var(--cap-row-h) + var(--strip-h));
+    --sq: clamp(48px, min(calc((100vh - 178px) / 8), calc((100vw - 420px) / 8)), 92px);
   }
 
   body {
     background: var(--bg);
     color: var(--text);
     font-family: 'IBM Plex Mono', monospace;
+    height: 100vh;
     min-height: 100vh;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -41,12 +45,17 @@
     gap: 0;
   }
 
+  body.review-active {
+    --sq: clamp(42px, min(calc((100vh - 198px) / 8), calc((100vw - 640px) / 8)), 76px);
+  }
+
   header {
     width: min(100%, 1320px);
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    margin-bottom: clamp(10px, 1.8vh, 18px);
+    margin-bottom: clamp(8px, 1.4vh, 14px);
+    flex: 0 0 auto;
   }
 
   .header-left {
@@ -129,10 +138,16 @@
 
   .main {
     display: grid;
-    grid-template-columns: max-content minmax(310px, 1fr);
+    grid-template-columns: max-content minmax(260px, 340px);
     gap: clamp(14px, 2vw, 28px);
     align-items: flex-start;
-    width: min(100%, 1320px);
+    width: min(100%, 1500px);
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  body.review-active .main {
+    grid-template-columns: max-content minmax(430px, 1fr);
   }
 
   .board-wrap {
@@ -161,6 +176,23 @@
     padding: 9px 12px;
     font-size: 12px;
   }
+  .capture-row {
+    width: calc(var(--sq) * 8 + 4px);
+    height: var(--cap-row-h);
+    min-height: var(--cap-row-h);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 1px 4px;
+    overflow: hidden;
+  }
+  .capture-row:empty::after {
+    content: '';
+    display: block;
+    height: 1px;
+  }
+
   .player-strip.top { border-radius: 7px 7px 0 0; border-bottom: 0; }
   .player-strip.bottom { border-radius: 0 0 7px 7px; border-top: 0; }
   .player-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -277,14 +309,20 @@
 
   .panel {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    gap: clamp(10px, 1.4vh, 16px);
+    grid-template-columns: 1fr;
+    gap: clamp(8px, 1.1vh, 12px);
     min-width: 0;
-    max-height: calc(100vh - 72px);
+    max-height: 100%;
     overflow-y: auto;
     padding-right: 2px;
+    align-content: start;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
+  }
+
+  body.review-active .panel {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: clamp(10px, 1.4vh, 16px);
   }
 
   .move-card, .review-card { grid-column: 1 / -1; }
@@ -293,7 +331,7 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: clamp(12px, 1.3vw, 16px);
+    padding: clamp(10px, 1.1vw, 14px);
   }
 
   .card-title {
@@ -301,7 +339,7 @@
     letter-spacing: 0.15em;
     color: var(--muted);
     text-transform: uppercase;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
 
   #turn-indicator {
@@ -330,7 +368,7 @@
   #status-text.alert { color: var(--accent); }
 
   .move-history {
-    max-height: clamp(150px, 24vh, 280px);
+    max-height: clamp(110px, 23vh, 240px);
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
@@ -363,8 +401,8 @@
   }
 
   .captured-piece {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 20px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -535,7 +573,7 @@
   .review-arrows {
     position: absolute;
     left: 2px;
-    top: calc(var(--strip-h) + 2px);
+    top: calc(var(--board-top) + 2px);
     width: calc(var(--sq) * 8);
     height: calc(var(--sq) * 8);
     pointer-events: none;
@@ -544,7 +582,7 @@
   }
   .review-arrow-line {
     fill: none;
-    stroke-width: 7;
+    stroke-width: 6;
     stroke-linecap: round;
     stroke-linejoin: round;
     opacity: 0.86;
@@ -589,7 +627,7 @@
   .review-eval-bar {
     position: absolute;
     left: calc(var(--sq) * 8 + 14px);
-    top: var(--strip-h);
+    top: var(--board-top);
     width: 18px;
     height: calc(var(--sq) * 8 + 4px);
     border: 1px solid var(--border);
@@ -672,15 +710,20 @@
 
   @media (max-width: 1040px) {
     :root {
-      --sq: clamp(44px, min(calc((100vh - 170px) / 8), calc((100vw - 430px) / 8)), 70px);
+      --sq: clamp(44px, min(calc((100vh - 180px) / 8), calc((100vw - 380px) / 8)), 78px);
     }
-    .main { grid-template-columns: max-content minmax(280px, 1fr); }
+    body.review-active {
+      --sq: clamp(42px, min(calc((100vh - 200px) / 8), calc((100vw - 520px) / 8)), 70px);
+    }
+    .main { grid-template-columns: max-content minmax(260px, 330px); }
+    body.review-active .main { grid-template-columns: max-content minmax(360px, 1fr); }
     .panel { grid-template-columns: 1fr; }
   }
 
   @media (max-width: 820px) {
     :root { --sq: clamp(36px, calc((100vw - 78px) / 8), 64px); }
-    body { padding: 10px; }
+    body, body.review-active { --sq: clamp(36px, calc((100vw - 78px) / 8), 64px); }
+    body { height: auto; min-height: 100vh; overflow: auto; padding: 10px; }
     header { align-items: flex-start; gap: 10px; flex-direction: column; margin-bottom: 10px; }
     .header-left { flex-wrap: wrap; gap: 10px; }
     .header-right { width: 100%; justify-content: space-between; }
@@ -730,6 +773,7 @@
 
 <div class="main">
   <div class="board-wrap">
+    <div class="capture-row top" id="captures-top"></div>
     <div class="player-strip top" id="player-top"></div>
     <div class="review-eval-bar" id="review-eval-bar" style="display:none;">
       <div class="review-eval-white" id="review-eval-white"></div>
@@ -744,6 +788,7 @@
       <div class="file-label">g</div><div class="file-label">h</div>
     </div>
     <div class="player-strip bottom" id="player-bottom"></div>
+    <div class="capture-row bottom" id="captures-bottom"></div>
   </div>
 
   <div class="panel">
@@ -765,12 +810,6 @@
       <div class="game-over-panel" id="online-game-over" style="display:none;"></div>
     </div>
 
-    <div class="card captured-card">
-      <div class="card-title">captured</div>
-      <div class="captures" id="captures-white"></div>
-      <div style="height:6px;"></div>
-      <div class="captures" id="captures-black"></div>
-    </div>
 
     <div class="card move-card">
       <div class="card-title">move history</div>
@@ -1056,7 +1095,7 @@ function buildBoard() {
     const label = document.createElement('div');
     label.className = 'rank-label';
     const visualRow = state.flipped ? rank : 7 - rank;
-    label.style.cssText = `position:absolute; left:-22px; top:calc(${visualRow} * var(--sq) + var(--strip-h)); height:var(--sq); display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted);`;
+    label.style.cssText = `position:absolute; left:-22px; top:calc(${visualRow} * var(--sq) + var(--board-top)); height:var(--sq); display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted);`;
     label.textContent = rank + 1;
     rankLabelWrap.appendChild(label);
   }
@@ -1706,18 +1745,27 @@ function computeCapturedFromBoard(board = state.board) {
 }
 
 function updateCaptured() {
-  const displayCaptured = reviewState.active
-    ? computeCapturedFromBoard(currentDisplayState().board)
-    : state.captured;
-  ['w','b'].forEach(color => {
-    const el = document.getElementById('captures-' + (color === 'w' ? 'white' : 'black'));
+  const board = currentDisplayState().board;
+  const missingByPieceColor = computeCapturedFromBoard(board);
+  const capturedByPlayer = {
+    w: missingByPieceColor.b,
+    b: missingByPieceColor.w
+  };
+  const topColor = state.flipped ? 'w' : 'b';
+  const bottomColor = state.flipped ? 'b' : 'w';
+  const targets = [
+    ['captures-top', topColor],
+    ['captures-bottom', bottomColor]
+  ];
+  for (const [id, color] of targets) {
+    const el = document.getElementById(id);
+    if (!el) continue;
     el.innerHTML = '';
-    displayCaptured[color].forEach(piece => {
+    for (const piece of capturedByPlayer[color] || []) {
       el.appendChild(createPieceElement(piece, 'captured-piece'));
-    });
-  });
+    }
+  }
 }
-
 function currentDisplayState() {
   if (reviewState.active && reviewState.positions[reviewState.index]) {
     return reviewState.positions[reviewState.index];
@@ -1840,6 +1888,7 @@ function enterReviewMode() {
     analysisStarted: false,
     analysisProgress: { done: 0, total: timeline.positions.length, running: false }
   };
+  document.body.classList.add('review-active');
   const card = document.getElementById('review-card');
   if (card) card.style.display = '';
   renderReviewPanel();
@@ -1852,6 +1901,7 @@ function enterReviewMode() {
 function exitReviewMode() {
   stopReviewAnalysis();
   reviewState.active = false;
+  document.body.classList.remove('review-active');
   const card = document.getElementById('review-card');
   if (card) card.style.display = 'none';
   updateReviewEvalBar(null);
@@ -2165,7 +2215,7 @@ function updateReviewEvalBar(whiteScore) {
 
 function scoreToWhitePercent(whiteScore) {
   if (!whiteScore) return 50;
-  if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 97 : 3;
+  if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 100 : 0;
   const cp = Math.max(-900, Math.min(900, Number(whiteScore.cp || 0)));
   return Math.max(2, Math.min(98, 100 / (1 + Math.exp(-cp / 170))));
 }
@@ -2327,8 +2377,8 @@ function updateReviewArrows() {
   svg.style.display = '';
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
   defs.innerHTML = `
-    <marker id="review-arrow-best" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 6 3 L 0 6 z" fill="var(--accent)"></path>
+    <marker id="review-arrow-best" markerWidth="5" markerHeight="5" refX="4.4" refY="2.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 5 2.5 L 0 5 z" fill="var(--accent)"></path>
     </marker>`;
   svg.appendChild(defs);
 
@@ -2360,7 +2410,7 @@ function drawReviewArrow(svg, from, to, kind) {
   const dy = b.y - a.y;
   const len = Math.hypot(dx, dy) || 1;
   const startPad = 15;
-  const endPad = 20;
+  const endPad = 18;
   const x1 = a.x + (dx / len) * startPad;
   const y1 = a.y + (dy / len) * startPad;
   const x2 = b.x - (dx / len) * endPad;
@@ -2386,6 +2436,7 @@ function resetLocalState(statusText = 'New game started.') {
   stopReviewAnalysis();
   reviewAnalysisCache.clear();
   reviewState.active = false;
+  document.body.classList.remove('review-active');
   reviewState.analysisStarted = false;
   reviewState.analysisProgress = { done: 0, total: 0, running: false };
   const reviewCard = document.getElementById('review-card');
