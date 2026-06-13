@@ -436,12 +436,45 @@
 
   .move-num { color: var(--muted); }
   .move-san {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 5px;
+    min-width: 0;
     padding: 1px 4px;
     border-radius: 3px;
     cursor: pointer;
   }
   .move-san:hover { background: var(--border); }
   .move-san.current { color: var(--accent); }
+  .move-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .move-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding: 1px 4px;
+    border-radius: 999px;
+    border: 1px solid rgba(232, 220, 200, 0.12);
+    background: rgba(232, 220, 200, 0.06);
+    color: var(--muted);
+    font-size: 8px;
+    line-height: 1.25;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .move-label.best, .review-classification.best { color: #f6d86f; border-color: rgba(246, 216, 111, 0.45); background: rgba(246, 216, 111, 0.12); }
+  .move-label.excellent, .review-classification.excellent { color: #8fd694; border-color: rgba(143, 214, 148, 0.38); background: rgba(143, 214, 148, 0.11); }
+  .move-label.good, .review-classification.good { color: #a7c8f2; border-color: rgba(167, 200, 242, 0.35); background: rgba(167, 200, 242, 0.10); }
+  .move-label.inaccuracy, .review-classification.inaccuracy { color: #e6c36a; border-color: rgba(230, 195, 106, 0.42); background: rgba(230, 195, 106, 0.11); }
+  .move-label.mistake, .review-classification.mistake { color: #ee9b61; border-color: rgba(238, 155, 97, 0.45); background: rgba(238, 155, 97, 0.12); }
+  .move-label.blunder, .review-classification.blunder { color: #f08379; border-color: rgba(240, 131, 121, 0.48); background: rgba(240, 131, 121, 0.13); }
 
   .captures {
     display: flex;
@@ -663,6 +696,21 @@
     font-family: 'Fraunces', serif;
     color: var(--accent);
     letter-spacing: -0.02em;
+  }
+  .review-classification {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    margin: 0 0 8px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(232, 220, 200, 0.12);
+    background: rgba(232, 220, 200, 0.06);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
   .review-engine-line {
     margin-top: 6px;
@@ -887,6 +935,7 @@
       <div class="review-engine" id="review-engine-box">
         <div class="review-engine-row"><span>Stockfish</span><strong id="review-engine-status">idle</strong></div>
         <div class="review-score" id="review-score">—</div>
+        <div class="review-classification" id="review-classification" style="display:none;">—</div>
         <div class="review-engine-row"><span>Played</span><strong id="review-played-move">—</strong></div>
         <div class="review-engine-row"><span>Best</span><strong id="review-best-move">—</strong></div>
         <div class="review-engine-line" id="review-engine-line">Engine analysis starts after review opens.</div>
@@ -1792,13 +1841,13 @@ function updateHistory() {
 
     const white = document.createElement('span');
     white.className = moveClassForHistory(pair.w, pair.wPly, pi, 'w');
-    white.textContent = pair.w ? moveDisplayText(pair.w) : '';
+    renderMoveCell(white, pair.w, pair.wPly);
     if (pair.w && reviewState.active) white.onclick = () => goToReviewPly(pair.wPly);
     row.appendChild(white);
 
     const black = document.createElement('span');
     black.className = moveClassForHistory(pair.b, pair.bPly, pi, 'b');
-    black.textContent = pair.b ? moveDisplayText(pair.b) : '';
+    renderMoveCell(black, pair.b, pair.bPly);
     if (pair.b && reviewState.active) black.onclick = () => goToReviewPly(pair.bPly);
     row.appendChild(black);
 
@@ -1810,6 +1859,79 @@ function updateHistory() {
   } else {
     el.scrollTop = el.scrollHeight;
   }
+}
+
+
+function renderMoveCell(el, move, ply) {
+  el.innerHTML = '';
+  const text = document.createElement('span');
+  text.className = 'move-text';
+  text.textContent = move ? moveDisplayText(move) : '';
+  el.appendChild(text);
+
+  const classification = moveClassificationForPly(ply);
+  if (classification) {
+    const badge = document.createElement('span');
+    badge.className = `move-label ${classification.key}`;
+    badge.textContent = classification.shortLabel || classification.label;
+    badge.title = classification.title || classification.label;
+    el.appendChild(badge);
+  }
+}
+
+function moveClassificationForPly(ply) {
+  if (!reviewState.active || !Number.isInteger(ply) || ply <= 0) return null;
+  if (!reviewState.moves[ply - 1] || !reviewState.positions[ply - 1]) return null;
+  const before = analysisForPly(ply - 1);
+  const after = analysisForPly(ply);
+  if (!before?.whiteScore || !after?.whiteScore) return null;
+
+  const move = reviewState.moves[ply - 1];
+  const beforePos = reviewState.positions[ply - 1];
+  const mover = beforePos.turn === 'b' ? 'black' : 'white';
+  const playedUci = moveToUci(move);
+  const bestUci = before.bestUci;
+  const bestEp = expectedPointsForColor(before.whiteScore, mover);
+  const actualEp = expectedPointsForColor(after.whiteScore, mover);
+  const loss = Math.max(0, bestEp - actualEp);
+  const playedBest = !!playedUci && !!bestUci && playedUci.toLowerCase() === bestUci.toLowerCase();
+
+  let key = 'blunder';
+  if (playedBest || loss <= 0.005) key = 'best';
+  else if (loss <= 0.02) key = 'excellent';
+  else if (loss <= 0.05) key = 'good';
+  else if (loss <= 0.10) key = 'inaccuracy';
+  else if (loss <= 0.20) key = 'mistake';
+
+  const labels = {
+    best: ['Best', 'BEST'],
+    excellent: ['Excellent', 'EXC'],
+    good: ['Good', 'GOOD'],
+    inaccuracy: ['Inaccuracy', 'INACC'],
+    mistake: ['Mistake', 'MIST'],
+    blunder: ['Blunder', 'BLUN']
+  };
+  const [label, shortLabel] = labels[key] || labels.good;
+  return {
+    key,
+    label,
+    shortLabel,
+    loss,
+    playedUci,
+    bestUci,
+    title: `${label} · expected-points loss ${loss.toFixed(3)}`
+  };
+}
+
+function expectedPointsForColor(whiteScore, color) {
+  const whiteEp = expectedPointsForWhite(whiteScore);
+  return color === 'black' ? 1 - whiteEp : whiteEp;
+}
+
+function expectedPointsForWhite(whiteScore) {
+  if (!whiteScore) return 0.5;
+  if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 1 : 0;
+  return scoreToWhitePercent(whiteScore) / 100;
 }
 
 function moveClassForHistory(move, ply, pairIndex, color) {
@@ -2186,6 +2308,7 @@ async function runReviewGameAnalysis(seq) {
 
         reviewState.analysisProgress = { done: countCachedReviewAnalyses(), total, running: true };
         renderReviewAnalysisPanel(reviewState.positions[reviewState.index]);
+        updateHistory();
         updateReviewEvalGraph();
         updateReviewArrows();
 
@@ -2204,6 +2327,7 @@ async function runReviewGameAnalysis(seq) {
         running: false
       };
       renderReviewAnalysisPanel(reviewState.positions[reviewState.index]);
+      updateHistory();
       updateReviewAnalysisProgressUi(false);
       updateReviewEvalGraph();
       updateReviewArrows();
@@ -2238,6 +2362,7 @@ function renderReviewAnalysisPanel(pos) {
       move,
       currentAnalysis: null,
       bestAnalysis: null,
+      classification: null,
       message: 'Engine review unlocks after the game is finished.'
     });
     updateReviewEvalBar(null);
@@ -2255,6 +2380,7 @@ function renderReviewAnalysisPanel(pos) {
     move,
     currentAnalysis,
     bestAnalysis,
+    classification: moveClassificationForPly(currentPly),
     message: reviewState.analysisStarted ? 'Analyzing game…' : 'Engine analysis starts after review opens.'
   });
   updateReviewEvalBar(currentAnalysis?.whiteScore || null);
@@ -2262,15 +2388,29 @@ function renderReviewAnalysisPanel(pos) {
   updateReviewEvalGraph();
 }
 
-function setReviewEngineUi({ status, currentAnalysis = null, bestAnalysis = null, move = null, message = '' }) {
+function setReviewEngineUi({ status, currentAnalysis = null, bestAnalysis = null, move = null, classification = null, message = '' }) {
   const statusEl = document.getElementById('review-engine-status');
   const scoreEl = document.getElementById('review-score');
+  const classEl = document.getElementById('review-classification');
   const playedEl = document.getElementById('review-played-move');
   const bestEl = document.getElementById('review-best-move');
   const lineEl = document.getElementById('review-engine-line');
 
   if (statusEl) statusEl.textContent = status || 'idle';
   if (scoreEl) scoreEl.textContent = currentAnalysis ? formatWhiteScore(currentAnalysis.whiteScore) : '—';
+  if (classEl) {
+    if (classification) {
+      classEl.style.display = '';
+      classEl.className = `review-classification ${classification.key}`;
+      classEl.textContent = classification.label;
+      classEl.title = classification.title || classification.label;
+    } else {
+      classEl.style.display = 'none';
+      classEl.textContent = '—';
+      classEl.className = 'review-classification';
+      classEl.removeAttribute('title');
+    }
+  }
   if (playedEl) playedEl.textContent = move ? moveDisplayText(move) : '—';
   if (bestEl) bestEl.textContent = bestAnalysis?.bestDisplay || '—';
   if (lineEl) lineEl.textContent = bestAnalysis?.lineDisplay || message || 'Engine analysis starts after review opens.';
