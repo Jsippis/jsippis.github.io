@@ -28,7 +28,8 @@
     --strip-h: 34px;
     --cap-row-h: 16px;
     --board-top: calc(var(--cap-row-h) + var(--strip-h));
-    --sq: clamp(48px, min(calc((100dvh - 160px) / 8), calc((100vw - 360px) / 8)), 96px);
+    --app-content-h: calc(100dvh - 74px);
+    --sq: var(--auto-sq, clamp(42px, min(calc((100dvh - 220px) / 8), calc((100vw - 360px) / 8)), 96px));
   }
 
   body {
@@ -46,7 +47,7 @@
   }
 
   body.review-active {
-    --sq: clamp(42px, min(calc((100dvh - 176px) / 8), calc((100vw - 700px) / 8)), 78px);
+    --sq: var(--auto-sq, clamp(38px, min(calc((100dvh - 232px) / 8), calc((100vw - 700px) / 8)), 78px));
   }
 
   header {
@@ -190,6 +191,7 @@
     max-width: 100%;
     flex: 1 1 auto;
     min-height: 0;
+    max-height: var(--app-content-h);
   }
 
   body.review-active .main {
@@ -360,7 +362,7 @@
     grid-template-columns: 1fr;
     gap: clamp(8px, 1vh, 10px);
     min-width: 0;
-    max-height: calc(100dvh - 74px);
+    max-height: var(--app-content-h);
     overflow-y: auto;
     padding-right: 2px;
     align-content: start;
@@ -371,7 +373,7 @@
   body.review-active .panel {
     grid-template-columns: 1fr;
     gap: clamp(10px, 1.2vh, 14px);
-    max-height: calc(100dvh - 74px);
+    max-height: var(--app-content-h);
   }
 
   .move-card, .review-card { grid-column: 1 / -1; }
@@ -759,10 +761,10 @@
 
   @media (max-width: 1040px) {
     :root {
-      --sq: clamp(44px, min(calc((100dvh - 154px) / 8), calc((100vw - 340px) / 8)), 82px);
+      --sq: var(--auto-sq, clamp(40px, min(calc((100dvh - 216px) / 8), calc((100vw - 340px) / 8)), 82px));
     }
     body.review-active {
-      --sq: clamp(40px, min(calc((100dvh - 174px) / 8), calc((100vw - 560px) / 8)), 72px);
+      --sq: var(--auto-sq, clamp(36px, min(calc((100dvh - 228px) / 8), calc((100vw - 560px) / 8)), 72px));
     }
     .main { grid-template-columns: max-content minmax(240px, 300px); }
     body.review-active .main { grid-template-columns: max-content minmax(360px, 1fr); }
@@ -984,7 +986,7 @@ let reviewState = {
   analysisProgress: { done: 0, total: 0, running: false }
 };
 
-const REVIEW_ENGINE_DEPTH = 12;
+const REVIEW_ENGINE_DEPTH = 16;
 let reviewEngine = null;
 let reviewAnalysisSeq = 0;
 let reviewAnalysisTimer = null;
@@ -1002,6 +1004,58 @@ const launchVisibility = query.get('visibility') || '';
 const launchColor = (query.get('color') || '').toLowerCase();
 const launchClient = (query.get('client') || '').toLowerCase();
 const launchViewColor = (query.get('view') || '').toLowerCase();
+
+function updateViewportFit() {
+  const root = document.documentElement;
+  const body = document.body;
+  if (!root || !body) return;
+
+  const mobile = window.matchMedia('(max-width: 820px)').matches;
+  if (mobile) {
+    root.style.removeProperty('--auto-sq');
+    root.style.removeProperty('--app-content-h');
+    return;
+  }
+
+  const bodyStyle = getComputedStyle(body);
+  const header = document.querySelector('header');
+  const main = document.querySelector('.main');
+  const panel = document.querySelector('.panel');
+  const boardWrap = document.querySelector('.board-wrap');
+  const rootStyle = getComputedStyle(root);
+
+  const padY = parseFloat(bodyStyle.paddingTop || 0) + parseFloat(bodyStyle.paddingBottom || 0);
+  const padX = parseFloat(bodyStyle.paddingLeft || 0) + parseFloat(bodyStyle.paddingRight || 0);
+  const headerStyle = header ? getComputedStyle(header) : null;
+  const headerHeight = header
+    ? header.getBoundingClientRect().height + parseFloat(headerStyle?.marginBottom || 0)
+    : 0;
+  const contentHeight = Math.max(260, window.innerHeight - padY - headerHeight - 2);
+  root.style.setProperty('--app-content-h', `${Math.floor(contentHeight)}px`);
+
+  const stripH = parseFloat(rootStyle.getPropertyValue('--strip-h')) || 34;
+  const capRowH = parseFloat(rootStyle.getPropertyValue('--cap-row-h')) || 16;
+  const boardFrameH = (stripH * 2) + (capRowH * 2) + 6;
+  const byHeight = (contentHeight - boardFrameH) / 8;
+
+  const mainStyle = main ? getComputedStyle(main) : null;
+  const gap = parseFloat(mainStyle?.columnGap || mainStyle?.gap || 0) || 0;
+  const panelWidth = panel ? panel.getBoundingClientRect().width : (body.classList.contains('review-active') ? 560 : 320);
+  const wrapStyle = boardWrap ? getComputedStyle(boardWrap) : null;
+  const boardSideSpace =
+    parseFloat(wrapStyle?.marginLeft || 0) +
+    parseFloat(wrapStyle?.marginRight || 0) +
+    parseFloat(wrapStyle?.paddingLeft || 0) +
+    parseFloat(wrapStyle?.paddingRight || 0) +
+    12;
+  const byWidth = (window.innerWidth - padX - panelWidth - gap - boardSideSpace) / 8;
+
+  const review = body.classList.contains('review-active');
+  const maxSq = review ? 78 : 96;
+  const minSq = review ? 36 : 38;
+  const size = Math.floor(Math.max(minSq, Math.min(maxSq, byHeight, byWidth)));
+  root.style.setProperty('--auto-sq', `${size}px`);
+}
 
 function describeLaunchMode() {
   if (launchMode === 'ai') return 'vs ai';
@@ -1934,6 +1988,7 @@ function enterReviewMode() {
     analysisProgress: { done: 0, total: timeline.positions.length, running: false }
   };
   document.body.classList.add('review-active');
+  updateViewportFit();
   const card = document.getElementById('review-card');
   if (card) card.style.display = '';
   renderReviewPanel();
@@ -1947,6 +2002,7 @@ function exitReviewMode() {
   stopReviewAnalysis();
   reviewState.active = false;
   document.body.classList.remove('review-active');
+  updateViewportFit();
   const card = document.getElementById('review-card');
   if (card) card.style.display = 'none';
   updateReviewEvalBar(null);
@@ -2482,6 +2538,7 @@ function resetLocalState(statusText = 'New game started.') {
   reviewAnalysisCache.clear();
   reviewState.active = false;
   document.body.classList.remove('review-active');
+  updateViewportFit();
   reviewState.analysisStarted = false;
   reviewState.analysisProgress = { done: 0, total: 0, running: false };
   const reviewCard = document.getElementById('review-card');
@@ -2812,6 +2869,7 @@ function updateOnlineMeta(room = {}) {
     (gameOverPanel && gameOverPanel.style.display !== 'none')
   );
   if (gameCard) gameCard.style.display = showGameStrip ? '' : 'none';
+  requestAnimationFrame(updateViewportFit);
 }
 
 function capitalize(value) {
@@ -3112,6 +3170,12 @@ function applyFen(fen) {
   state.fullmove = Number(parts[5] || 1);
   state.fen = normalized;
 }
+
+updateViewportFit();
+window.addEventListener('resize', () => {
+  updateViewportFit();
+  buildBoard();
+});
 
 buildBoard();
 applyLaunchParams();
