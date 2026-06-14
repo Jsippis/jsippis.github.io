@@ -10,11 +10,16 @@
     blunder: ['Blunder', 'BLUN']
   };
 
+  const ANALYSIS_FORMULA_VERSION = 'stable-ep-v2';
+
   function scoreToWhitePercent(whiteScore) {
     if (!whiteScore) return 50;
     if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 100 : 0;
-    const cp = Math.max(-900, Math.min(900, Number(whiteScore.cp || 0)));
-    return Math.max(2, Math.min(98, 100 / (1 + Math.exp(-cp / 170))));
+    const cp = Math.max(-1200, Math.min(1200, Number(whiteScore.cp || 0)));
+    // Calmer expected-points curve than the old review prototype. The old curve
+    // treated ordinary centipawn swings as huge win-probability swings, which made
+    // Chesstein accuracy look much harsher and less like mainstream reviews.
+    return Math.max(1, Math.min(99, 100 / (1 + Math.exp(-cp / 300))));
   }
 
   function formatWhiteScore(whiteScore) {
@@ -82,10 +87,13 @@
 
   function moveAccuracyFromLoss(loss) {
     const n = Math.max(0, Number(loss || 0));
-    // A simple Chesstein estimate: tiny expected-point losses remain near 100,
-    // then severe mistakes fall quickly. This is intentionally not Chess.com's
-    // private accuracy formula.
-    return Math.max(0, Math.min(100, 100 * Math.exp(-4.25 * n)));
+    if (n <= 0.003) return 100;
+    // CAPS-style estimate from expected-points loss. This is still Chesstein's
+    // own formula, but it is intentionally less volatile than the old prototype.
+    // Small losses remain very high, medium mistakes fall visibly, and game-losing
+    // swings still collapse toward zero.
+    const score = 100 / (1 + Math.pow(n / 0.145, 1.72));
+    return Math.max(0, Math.min(100, score));
   }
 
   function averageAccuracy(classifications = [], color = null, moves = []) {
@@ -119,6 +127,7 @@
 
   window.ChessteinAnalysis = {
     LABELS,
+    ANALYSIS_FORMULA_VERSION,
     scoreToWhitePercent,
     formatWhiteScore,
     expectedPointsForWhite,

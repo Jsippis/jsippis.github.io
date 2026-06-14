@@ -89,6 +89,11 @@
           if (!line) return;
           this._handleLine(line);
           if (line === 'uciok') {
+            // Keep browser/report analysis as repeatable as possible. Unsupported
+            // UCI options are ignored by Stockfish, so these are safe across builds.
+            this.post('setoption name Threads value 1');
+            this.post('setoption name Hash value 32');
+            this.post('setoption name MultiPV value 1');
             this.post('isready');
           } else if (line === 'readyok' && !this.readyResolved) {
             this.readyResolved = true;
@@ -154,6 +159,11 @@
       this.post('stop');
       await this._readyCheck();
       if (ticket !== this.ticket) throw new Error('Analysis cancelled.');
+      if (options.clearHash) {
+        this.post('setoption name Clear Hash');
+        await this._readyCheck();
+        if (ticket !== this.ticket) throw new Error('Analysis cancelled.');
+      }
 
       return new Promise((resolve, reject) => {
         const result = {

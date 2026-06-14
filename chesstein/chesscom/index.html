@@ -648,6 +648,13 @@
     font-size: 18px;
     margin-top: 3px;
   }
+  .accuracy-card small {
+    display: block;
+    color: var(--muted);
+    font-size: 9px;
+    margin-top: 2px;
+    min-height: 12px;
+  }
 
   .move-history {
     max-height: clamp(180px, 34dvh, 340px);
@@ -791,15 +798,14 @@
             <option value="black">as black</option>
           </select>
           <select id="analysis-depth" onchange="updateDepthHint()">
-            <option value="adaptive" selected>adaptive 10→18</option>
-            <option value="10">fast depth 10</option>
-            <option value="14">normal depth 14</option>
-            <option value="18">deep depth 18</option>
+            <option value="standard" selected>standard report d15</option>
+            <option value="fast">fast report d12</option>
+            <option value="deep">deep report d18</option>
           </select>
         </div>
         <input id="opponent-filter" placeholder="filter opponent or opening" autocomplete="off" oninput="renderGames()" />
         <div id="status-text">Enter a Chess.com username to load recent public games.</div>
-        <div class="small">Move labels and per-move accuracy are Chesstein estimates from local Stockfish, not Chess.com private review data.</div>
+        <div class="small">Report labels are fixed-depth Chesstein estimates. Live engine can go deeper while you browse, but it does not rewrite the cached report.</div>
       </section>
 
       <section class="card">
@@ -872,8 +878,8 @@
         </div>
 
         <div class="accuracy-grid">
-          <div class="accuracy-card"><span id="white-name">White</span><strong id="white-accuracy">—</strong></div>
-          <div class="accuracy-card"><span id="black-name">Black</span><strong id="black-accuracy">—</strong></div>
+          <div class="accuracy-card"><span id="white-name">White</span><strong id="white-accuracy">—</strong><small id="white-api-accuracy"></small></div>
+          <div class="accuracy-card"><span id="black-name">Black</span><strong id="black-accuracy">—</strong><small id="black-api-accuracy"></small></div>
         </div>
 
         <div class="review-engine">
@@ -881,12 +887,15 @@
           <div class="review-score" id="score">—</div>
           <div class="review-engine-row"><span>move</span><strong id="move-detail">start position</strong></div>
           <div class="review-engine-row"><span>played</span><strong id="played-move">—</strong></div>
-          <div class="review-engine-row"><span>best</span><strong id="best-move">—</strong></div>
-          <div class="review-engine-row"><span>line</span><strong id="engine-line">Select a game, then run analysis.</strong></div>
+          <div class="review-engine-row"><span>report best</span><strong id="best-move">—</strong></div>
+          <div class="review-engine-row"><span>report line</span><strong id="engine-line">Select a game, then run analysis.</strong></div>
+          <div class="review-engine-row"><span>live depth</span><strong id="live-depth">—</strong></div>
+          <div class="review-engine-row"><span>live best</span><strong id="live-best">—</strong></div>
         </div>
 
         <div class="button-row" style="margin-top:10px;">
-          <button class="primary" id="analyze-btn" type="button" onclick="analyzeCurrentGame(false)">analyze game</button>
+          <button class="primary" id="analyze-btn" type="button" onclick="analyzeCurrentGame(false)">analyze report</button>
+          <button type="button" onclick="analyzeCurrentGame(true)">recalculate</button>
           <button type="button" onclick="stopAnalysis()">stop</button>
         </div>
       </section>
@@ -922,14 +931,25 @@ const PIECE_FALLBACK = {
 const PIECE_ASSET_ROOT = '../gui/assets/pieces/cburnett/';
 const GAME_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_STORED_ANALYSES = 8;
+const REPORT_CACHE_VERSION = 'v4-stable-report';
+const REPORT_PROFILES = {
+  fast: { id: 'fast', label: 'fast report d12', depth: 12, timeoutMs: 22000 },
+  standard: { id: 'standard', label: 'standard report d15', depth: 15, timeoutMs: 32000 },
+  deep: { id: 'deep', label: 'deep report d18', depth: 18, timeoutMs: 48000 }
+};
+const LIVE_PROFILE = { minDepth: 10, depth: 22, stableDepths: 4, scoreToleranceCp: 8, maxTimeMs: 9000, timeoutMs: 14000 };
 let games = [];
 let selectedGame = null;
 let selectedGameIndex = -1;
 let currentUsername = '';
 let engine = null;
 let analysisRun = 0;
+let liveRun = 0;
+let liveTimer = null;
+let reportAnalyzing = false;
 let boardFlipped = false;
 let analysisCache = new Map();
+let liveAnalysis = null;
 let review = {
   positions: [ChessteinPgn.fenToPosition(ChessteinPgn.START_FEN)],
   moves: [],
@@ -961,37 +981,29 @@ function safeStorageRemove(key) {
 }
 
 function analysisSetting() {
-  return String(document.getElementById('analysis-depth')?.value || 'adaptive');
+  const value = String(document.getElementById('analysis-depth')?.value || 'standard');
+  return REPORT_PROFILES[value] ? value : 'standard';
+}
+
+function reportProfile() {
+  return REPORT_PROFILES[analysisSetting()] || REPORT_PROFILES.standard;
 }
 
 function analyzerDepth() {
-  const setting = analysisSetting();
-  return setting === 'adaptive' ? 18 : Number(setting || 14);
+  return reportProfile().depth;
 }
 
 function analysisLabel() {
-  const setting = analysisSetting();
-  return setting === 'adaptive' ? 'adaptive 10→18' : `depth ${analyzerDepth()}`;
+  return reportProfile().label;
 }
 
 function analysisOptionsForPly(ply, fen) {
-  const setting = analysisSetting();
-  if (setting !== 'adaptive') {
-    return { depth: analyzerDepth() };
-  }
+  const profile = reportProfile();
   return {
-    depth: 18,
-    progressive: true,
-    minDepth: 10,
-    stableDepths: 3,
-    scoreToleranceCp: 14,
-    maxTimeMs: 6500,
-    timeoutMs: 12000,
-    onUpdate: (partial) => {
-      if (!partial?.depth) return;
-      document.getElementById('engine-state').textContent = `${ply + 1}/${review.positions.length} · d${partial.depth}`;
-      document.getElementById('review-progress').textContent = `Adaptive analysis: position ${ply + 1} / ${review.positions.length} · depth ${partial.depth}`;
-    }
+    depth: profile.depth,
+    timeoutMs: profile.timeoutMs,
+    clearHash: true,
+    reportMode: true
   };
 }
 
@@ -1001,7 +1013,8 @@ function gameCacheKey(username, months) {
 
 function analysisCacheKey(game = selectedGame) {
   const id = game?.uuid || game?.url || game?.pgn?.slice(0, 80) || 'unknown-game';
-  return `chesstein:chesscom:analysis:v3:${String(id).slice(0, 120)}:${analysisSetting()}`;
+  const formula = window.ChessteinAnalysis?.ANALYSIS_FORMULA_VERSION || 'unknown-formula';
+  return `chesstein:chesscom:analysis:${REPORT_CACHE_VERSION}:${formula}:${String(id).slice(0, 120)}:${analysisSetting()}`;
 }
 
 function loadGameListCache(username, months) {
@@ -1031,6 +1044,10 @@ function loadStoredAnalysis() {
   try {
     const cached = JSON.parse(raw);
     if (!cached || !Array.isArray(cached.entries)) return false;
+    if (cached.cacheVersion !== REPORT_CACHE_VERSION) return false;
+    if (cached.formulaVersion !== (window.ChessteinAnalysis?.ANALYSIS_FORMULA_VERSION || 'unknown-formula')) return false;
+    if (cached.profile !== analysisSetting()) return false;
+    if (Number(cached.depth) !== analyzerDepth()) return false;
     analysisCache = new Map(cached.entries);
     updateClassifications();
     return analysisCache.size > 0;
@@ -1045,7 +1062,10 @@ function saveStoredAnalysis() {
   const entries = [...analysisCache.entries()];
   safeStorageSet(analysisCacheKey(), JSON.stringify({
     createdAt: Date.now(),
-    setting: analysisSetting(),
+    cacheVersion: REPORT_CACHE_VERSION,
+    formulaVersion: window.ChessteinAnalysis?.ANALYSIS_FORMULA_VERSION || 'unknown-formula',
+    profile: analysisSetting(),
+    setting: analysisLabel(),
     depth: analyzerDepth(),
     gameId: selectedGame.uuid || selectedGame.url || '',
     entries
@@ -1055,7 +1075,7 @@ function saveStoredAnalysis() {
 
 function trimStoredAnalyses() {
   try {
-    const prefix = 'chesstein:chesscom:analysis:v';
+    const prefix = 'chesstein:chesscom:analysis:';
     const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
     const dated = keys.map(key => {
       try { return { key, createdAt: JSON.parse(localStorage.getItem(key) || '{}').createdAt || 0 }; }
@@ -1199,8 +1219,10 @@ function reloadIgnoringCache() {
 
 function updateDepthHint() {
   if (!selectedGame) return;
+  stopLiveAnalysisOnly();
   const loaded = loadStoredAnalysis();
   renderAll();
+  if (loaded) scheduleLiveAnalysis();
   setStatus(loaded
     ? `Loaded cached ${analysisLabel()} analysis for this game.`
     : `Analysis set to ${analysisLabel()}. Run analysis to create a cached review.`
@@ -1241,6 +1263,7 @@ function renderGames() {
 function resetReview() {
   stopAnalysis();
   analysisCache = new Map();
+  liveAnalysis = null;
   review = {
     positions: [ChessteinPgn.fenToPosition(ChessteinPgn.START_FEN)],
     moves: [],
@@ -1266,10 +1289,11 @@ function selectGame(index) {
     const hadCachedAnalysis = loadStoredAnalysis();
     renderGames();
     renderAll();
+    if (hadCachedAnalysis) scheduleLiveAnalysis();
     const warningText = parsed.warnings?.length ? ` PGN warnings: ${parsed.warnings.length}.` : '';
     setStatus(hadCachedAnalysis
       ? `Loaded cached ${analysisLabel()} analysis for this game.${warningText}`
-      : `Game loaded. Press analyze game to run Stockfish.${warningText}`
+      : `Game loaded. Press analyze report to run stable Stockfish review.${warningText}`
     , hadCachedAnalysis ? 'alert' : '');
   } catch (error) {
     setStatus(error.message || 'Could not parse this game PGN.', 'error');
@@ -1284,6 +1308,12 @@ function ensureEngine() {
 
 function stopAnalysis() {
   analysisRun += 1;
+  liveRun += 1;
+  reportAnalyzing = false;
+  if (liveTimer) {
+    clearTimeout(liveTimer);
+    liveTimer = null;
+  }
   if (engine) engine.stop();
   document.getElementById('engine-state').textContent = 'idle';
   document.getElementById('analyze-btn').disabled = false;
@@ -1293,6 +1323,13 @@ function analysisForPly(ply) {
   const pos = review.positions[ply];
   if (!pos) return null;
   return analysisCache.get(pos.fen || ChessteinPgn.positionToFen(pos)) || null;
+}
+
+function hasReportForAllPositions() {
+  return review.positions.length > 0 && review.positions.every(pos => {
+    const fen = pos.fen || ChessteinPgn.positionToFen(pos);
+    return analysisCache.has(fen);
+  });
 }
 
 function classifyPly(ply) {
@@ -1316,7 +1353,9 @@ function updateClassifications() {
 
 async function analyzeCurrentGame(force = false) {
   if (!selectedGame) return setStatus('Select a Chess.com game first.', 'error');
+  stopLiveAnalysisOnly();
   const seq = ++analysisRun;
+  reportAnalyzing = true;
   const total = review.positions.length;
   const depth = analyzerDepth();
   const modeLabel = analysisLabel();
@@ -1330,9 +1369,9 @@ async function analyzeCurrentGame(force = false) {
       const fen = pos.fen || ChessteinPgn.positionToFen(pos);
       if (analysisCache.has(fen) && !force) continue;
 
-      document.getElementById('engine-state').textContent = `${ply + 1}/${total}`;
-      document.getElementById('review-progress').textContent = `Analyzing ${modeLabel}: ${ply + 1} / ${total}`;
-      setStatus(`Analyzing game: ${ply + 1} / ${total}`);
+      document.getElementById('engine-state').textContent = `${ply + 1}/${total} · d${depth}`;
+      document.getElementById('review-progress').textContent = `Building stable ${modeLabel}: ${ply + 1} / ${total}`;
+      setStatus(`Building stable report: ${ply + 1} / ${total}`);
 
       const raw = await engine.analyzeFen(fen, analysisOptionsForPly(ply, fen));
       if (seq !== analysisRun) return;
@@ -1342,6 +1381,8 @@ async function analyzeCurrentGame(force = false) {
         formatBestMove: ChessteinPgn.formatUciMoveForPosition,
         formatLine: (pv, startPos) => ChessteinPgn.formatEngineLine(pv, startPos, 7)
       });
+      analysis.reportDepth = raw.depth || depth;
+      analysis.reportProfile = analysisSetting();
       analysisCache.set(fen, analysis);
       updateClassifications();
 
@@ -1349,10 +1390,13 @@ async function analyzeCurrentGame(force = false) {
       renderAll();
     }
     saveStoredAnalysis();
-    document.getElementById('engine-state').textContent = 'complete';
+    reportAnalyzing = false;
+    document.getElementById('engine-state').textContent = 'report complete';
     document.getElementById('analyze-btn').disabled = false;
-    setStatus(`Analysis complete with ${modeLabel}. Cached locally for this browser.`, 'alert');
+    setStatus(`Stable ${modeLabel} complete. It is cached locally and will be repeatable for this profile.`, 'alert');
+    scheduleLiveAnalysis();
   } catch (error) {
+    reportAnalyzing = false;
     if (error?.message === 'Analysis cancelled.') return;
     document.getElementById('engine-state').textContent = 'error';
     document.getElementById('analyze-btn').disabled = false;
@@ -1360,9 +1404,69 @@ async function analyzeCurrentGame(force = false) {
   }
 }
 
+function stopLiveAnalysisOnly() {
+  liveRun += 1;
+  liveAnalysis = null;
+  if (liveTimer) {
+    clearTimeout(liveTimer);
+    liveTimer = null;
+  }
+  if (engine) engine.stop();
+}
+
+function scheduleLiveAnalysis() {
+  if (!selectedGame || reportAnalyzing) return;
+  if (!hasReportForAllPositions()) return;
+  if (liveTimer) clearTimeout(liveTimer);
+  const ply = review.index;
+  liveTimer = setTimeout(() => runLiveAnalysis(ply), 220);
+}
+
+async function runLiveAnalysis(ply) {
+  if (!selectedGame || reportAnalyzing || ply !== review.index) return;
+  const pos = review.positions[ply];
+  if (!pos) return;
+  const seq = ++liveRun;
+  const fen = pos.fen || ChessteinPgn.positionToFen(pos);
+  try {
+    await ensureEngine();
+    const makeLive = (raw) => ChessteinAnalysis.enrichReviewAnalysis(raw, pos, {
+      ply,
+      formatBestMove: ChessteinPgn.formatUciMoveForPosition,
+      formatLine: (pv, startPos) => ChessteinPgn.formatEngineLine(pv, startPos, 7)
+    });
+    const raw = await engine.analyzeFen(fen, {
+      depth: LIVE_PROFILE.depth,
+      progressive: true,
+      minDepth: LIVE_PROFILE.minDepth,
+      stableDepths: LIVE_PROFILE.stableDepths,
+      scoreToleranceCp: LIVE_PROFILE.scoreToleranceCp,
+      maxTimeMs: LIVE_PROFILE.maxTimeMs,
+      timeoutMs: LIVE_PROFILE.timeoutMs,
+      onUpdate: (partial) => {
+        if (seq !== liveRun || ply !== review.index || !partial?.depth) return;
+        liveAnalysis = makeLive(partial);
+        liveAnalysis.liveDepth = partial.depth;
+        document.getElementById('engine-state').textContent = `live d${partial.depth}`;
+        renderEnginePanel();
+      }
+    });
+    if (seq !== liveRun || ply !== review.index) return;
+    liveAnalysis = makeLive(raw);
+    liveAnalysis.liveDepth = raw.depth || LIVE_PROFILE.depth;
+    document.getElementById('engine-state').textContent = `live d${liveAnalysis.liveDepth}`;
+    renderEnginePanel();
+  } catch (error) {
+    if (error?.message === 'Analysis cancelled.') return;
+  }
+}
+
+
 function goToPly(ply) {
   review.index = Math.max(0, Math.min(review.positions.length - 1, Number(ply) || 0));
+  liveAnalysis = null;
   renderAll();
+  scheduleLiveAnalysis();
 }
 
 function flipBoard() {
@@ -1463,7 +1567,10 @@ function renderEnginePanel() {
   document.getElementById('score').textContent = analysis?.whiteScore ? ChessteinAnalysis.formatWhiteScore(analysis.whiteScore) : '—';
   document.getElementById('played-move').textContent = move?.san || move?.uci || '—';
   document.getElementById('best-move').textContent = beforeAnalysis?.bestDisplay || '—';
-  document.getElementById('engine-line').textContent = beforeAnalysis?.lineDisplay || (selectedGame ? 'Press analyze game to run Stockfish.' : 'Select a game, then run analysis.');
+  document.getElementById('engine-line').textContent = beforeAnalysis?.lineDisplay || (selectedGame ? 'Press analyze report to run Stockfish.' : 'Select a game, then run analysis.');
+  const liveForCurrent = liveAnalysis && liveAnalysis.ply === review.index ? liveAnalysis : null;
+  document.getElementById('live-depth').textContent = liveForCurrent ? `d${liveForCurrent.liveDepth || liveForCurrent.depth || '—'}` : (hasReportForAllPositions() ? 'warming up…' : 'after report');
+  document.getElementById('live-best').textContent = liveForCurrent?.bestDisplay || '—';
 
   const cls = document.getElementById('classification');
   if (classification) {
@@ -1476,7 +1583,7 @@ function renderEnginePanel() {
   }
 
   document.getElementById('review-progress').textContent = selectedGame
-    ? `${review.index} / ${Math.max(0, review.positions.length - 1)} plies · ${analysisLabel()} · ${analysisCache.size}/${review.positions.length} positions analyzed`
+    ? `${review.index} / ${Math.max(0, review.positions.length - 1)} plies · stable ${analysisLabel()} · ${analysisCache.size}/${review.positions.length} positions analyzed`
     : 'Select a game from the match history.';
 
   updateEvalBar(analysis?.whiteScore || null);
@@ -1562,6 +1669,8 @@ function renderAccuracy() {
   const blackText = blackEstimate !== null ? `${blackEstimate.toFixed(1)}%` : (blackApi ? `${Number(blackApi).toFixed(1)}%` : '—');
   document.getElementById('white-accuracy').textContent = whiteText;
   document.getElementById('black-accuracy').textContent = blackText;
+  document.getElementById('white-api-accuracy').textContent = whiteApi ? `Chess.com ${Number(whiteApi).toFixed(1)}%` : '';
+  document.getElementById('black-api-accuracy').textContent = blackApi ? `Chess.com ${Number(blackApi).toFixed(1)}%` : '';
   document.getElementById('white-accuracy-strip').textContent = whiteText;
   document.getElementById('black-accuracy-strip').textContent = blackText;
 
