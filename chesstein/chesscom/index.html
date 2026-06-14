@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chesstein · Chess.com Analyzer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #111113;
+    --panel: #17181c;
+    --panel-2: #202128;
+    --line: #30323a;
+    --soft-line: rgba(255,255,255,0.08);
+    --text: #f4f4f5;
+    --muted: #a3a6af;
+    --faint: #737783;
+    --accent: #f5a400;
+    --accent-2: #18b95b;
+    --danger: #e05a4e;
+    --blue: #68a9ff;
+    --board-light: #eedeb8;
+    --board-dark: #b8864c;
+    --last: rgba(245, 164, 0, 0.45);
+    --best: rgba(24,185,91,0.95);
+    --shadow: 0 20px 70px rgba(0,0,0,0.35);
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 50% -20%, rgba(245,164,0,0.16), transparent 36rem),
+      radial-gradient(circle at 100% 15%, rgba(24,185,91,0.10), transparent 32rem),
+      var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  a { color: inherit; }
+  .page { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 46px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 900; font-size: clamp(24px, 4vw, 42px); letter-spacing: -0.04em; }
+  .brand-mark { width: 40px; height: 40px; border-radius: 14px; display: grid; place-items: center; color: #171100; background: linear-gradient(135deg, var(--accent), #ffcf4b); }
+  .brand-accent { color: var(--accent); }
+  .pill { border: 1px solid var(--line); background: rgba(255,255,255,0.04); color: var(--muted); padding: 9px 13px; border-radius: 999px; text-decoration: none; font-size: 13px; }
+  .hero { margin-bottom: 20px; }
+  .hero h1 { margin: 0; font-size: clamp(34px, 5vw, 64px); letter-spacing: -0.055em; line-height: 0.95; }
+  .hero p { margin: 12px 0 0; max-width: 860px; color: #dfe1e6; line-height: 1.55; font-size: 16px; }
+  .panel { background: rgba(23,24,28,0.94); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+  .search-panel { padding: 18px; margin-bottom: 18px; display: grid; gap: 14px; }
+  .search-row { display: grid; grid-template-columns: minmax(160px, 1fr) 150px 145px; gap: 10px; }
+  input, select { background: #111216; border: 1px solid #373a44; color: var(--text); border-radius: 12px; padding: 12px 13px; outline: none; }
+  input:focus, select:focus { border-color: rgba(245,164,0,0.7); box-shadow: 0 0 0 3px rgba(245,164,0,0.12); }
+  .primary-btn, .secondary-btn { border: 0; border-radius: 12px; padding: 12px 14px; color: #fff; font-weight: 900; }
+  .primary-btn { background: linear-gradient(180deg, #20bb5d, #14a24d); }
+  .secondary-btn { background: #3c3f49; }
+  .small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .status { color: var(--muted); font-size: 13px; min-height: 19px; }
+  .status.error { color: #ffaaa2; }
+  .layout { display: grid; grid-template-columns: minmax(0, 360px) minmax(520px, 1fr) minmax(0, 360px); gap: 18px; align-items: start; }
+  .games-panel, .review-panel, .engine-panel { min-height: 180px; overflow: hidden; }
+  .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--soft-line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .panel-head h2, .panel-head h3 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #c7c9d1; }
+  .count { color: var(--muted); font-size: 12px; }
+  .game-list { display: grid; max-height: 720px; overflow: auto; }
+  .game-card { width: 100%; border: 0; border-bottom: 1px solid rgba(255,255,255,0.06); background: transparent; color: inherit; text-align: left; padding: 13px 15px; display: grid; gap: 5px; }
+  .game-card:hover, .game-card.active { background: rgba(245,164,0,0.10); }
+  .game-title { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 800; }
+  .game-meta { color: var(--muted); font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .review-panel { padding: 16px; }
+  .board-wrap { display: grid; grid-template-columns: 20px minmax(280px, 640px) 24px; justify-content: center; gap: 10px; align-items: stretch; }
+  .rank-labels, .file-labels { color: var(--muted); font-size: 11px; user-select: none; }
+  .rank-labels { display: grid; grid-template-rows: repeat(8, 1fr); align-items: center; text-align: right; padding-right: 2px; }
+  .file-labels { grid-column: 2; display: grid; grid-template-columns: repeat(8, 1fr); text-align: center; margin-top: 6px; }
+  .board-area { position: relative; aspect-ratio: 1; width: min(100%, 640px); }
+  .board { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); overflow: hidden; border-radius: 14px; border: 1px solid rgba(255,255,255,0.12); }
+  .sq { display: grid; place-items: center; font-size: clamp(24px, 5vw, 56px); line-height: 1; text-shadow: 0 2px 5px rgba(0,0,0,0.25); }
+  .sq.light { background: var(--board-light); }
+  .sq.dark { background: var(--board-dark); }
+  .sq.last { box-shadow: inset 0 0 0 999px var(--last); }
+  .arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .eval-bar { position: relative; width: 24px; border-radius: 999px; background: #111; border: 1px solid rgba(255,255,255,0.15); overflow: hidden; }
+  .eval-white { position: absolute; bottom: 0; left: 0; right: 0; height: 50%; background: #f4f4f5; transition: height 180ms ease; }
+  .eval-label { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-90deg); color: #111; background: rgba(255,255,255,0.78); border-radius: 999px; padding: 2px 6px; font-size: 11px; font-weight: 900; white-space: nowrap; }
+  .nav-row { margin-top: 14px; display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .nav-row button { border: 1px solid var(--line); background: #252730; color: var(--text); border-radius: 10px; padding: 8px 10px; }
+  .ply-counter { color: var(--muted); font-size: 13px; min-width: 82px; text-align: center; }
+  .move-history { padding: 12px 15px; display: grid; gap: 5px; max-height: 290px; overflow: auto; }
+  .move-pair { display: grid; grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; }
+  .move-num { color: var(--faint); }
+  .move-cell { min-height: 28px; border-radius: 8px; padding: 5px 7px; display: flex; align-items: center; justify-content: space-between; gap: 5px; background: rgba(255,255,255,0.03); }
+  .move-cell.clickable { cursor: pointer; }
+  .move-cell.current { background: rgba(245,164,0,0.22); }
+  .move-label { border-radius: 999px; padding: 2px 5px; font-size: 9px; font-weight: 900; letter-spacing: 0.03em; color: #111; }
+  .move-label.best { background: #55d86f; }
+  .move-label.excellent { background: #77d9ff; }
+  .move-label.good { background: #d3e875; }
+  .move-label.inaccuracy { background: #ffd166; }
+  .move-label.mistake { background: #f59e0b; }
+  .move-label.blunder { background: #ff6b6b; color: #fff; }
+  .engine-panel { display: grid; gap: 0; }
+  .engine-body { padding: 15px; display: grid; gap: 12px; }
+  .score { font-size: 42px; letter-spacing: -0.05em; font-weight: 950; }
+  .classification { display: inline-flex; width: fit-content; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 900; color: #111; background: #d3e875; }
+  .classification.blunder, .classification.mistake { color: #fff; }
+  .kv { display: grid; grid-template-columns: 74px 1fr; gap: 8px; font-size: 13px; align-items: start; }
+  .kv span { color: var(--muted); }
+  .line { color: #d7dae2; font-size: 12px; line-height: 1.45; padding: 10px; border-radius: 10px; background: rgba(255,255,255,0.04); }
+  .graph { width: 100%; height: 66px; background: rgba(255,255,255,0.03); border: 1px solid var(--soft-line); border-radius: 12px; }
+  .graph path { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+  .graph line { stroke: rgba(255,255,255,0.16); stroke-width: 1; }
+  .graph circle { fill: var(--accent); stroke: #111; stroke-width: 1.5; }
+  .accuracy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .accuracy-card { border: 1px solid var(--soft-line); border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.035); }
+  .accuracy-card strong { display: block; font-size: 20px; margin-top: 4px; }
+  .empty { padding: 20px 15px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .game-list { max-height: 360px; } }
+  @media (max-width: 680px) { .page { width: min(100% - 20px, 1480px); } .search-row { grid-template-columns: 1fr; } .board-wrap { grid-template-columns: 16px minmax(0, 1fr) 20px; gap: 6px; } .sq { font-size: clamp(24px, 11vw, 48px); } .topbar { align-items: flex-start; flex-direction: column; } }
+</style>
+</head>
+<body>
+  <main class="page">
+    <nav class="topbar">
+      <a class="brand" href="../"><div class="brand-mark">♞</div><span><span>Ches</span><span class="brand-accent">stein</span></span></a>
+      <a class="pill" href="../">← back to lobby</a>
+    </nav>
+
+    <section class="hero">
+      <h1>Chess.com Game Analysis</h1>
+      <p>Import public Chess.com games, step through the moves, and run Chesstein’s browser Stockfish review with evals, best moves, estimated move accuracy, and Chesstein-style labels.</p>
+    </section>
+
+    <section class="panel search-panel">
+      <div class="search-row">
+        <input id="username" placeholder="Chess.com username" autocomplete="off" />
+        <select id="month-count">
+          <option value="1">Latest month</option>
+          <option value="3" selected>Latest 3 months</option>
+          <option value="6">Latest 6 months</option>
+        </select>
+        <button class="primary-btn" onclick="loadGames()">Load games</button>
+      </div>
+      <div class="small">Uses Chess.com’s public read API. Move labels and per-move accuracy are Chesstein estimates from local Stockfish analysis, not Chess.com’s private review data.</div>
+      <div class="status" id="status">Enter a username to load recent public games.</div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel games-panel">
+        <div class="panel-head"><h2>Match history</h2><span class="count" id="game-count">0 games</span></div>
+        <div class="game-list" id="game-list"><div class="empty">No games loaded yet.</div></div>
+      </aside>
+
+      <section class="panel review-panel">
+        <div class="board-wrap">
+          <div class="rank-labels" id="rank-labels"></div>
+          <div>
+            <div class="board-area">
+              <div class="board" id="board"></div>
+              <svg class="arrows" id="arrows" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="file-labels" id="file-labels"></div>
+          </div>
+          <div class="eval-bar" id="eval-bar"><div class="eval-white" id="eval-white"></div><div class="eval-label" id="eval-label">0.0</div></div>
+        </div>
+        <div class="nav-row">
+          <button onclick="goToPly(0)">|&lt;</button>
+          <button onclick="goToPly(review.index - 1)">&lt;</button>
+          <span class="ply-counter" id="ply-counter">0 / 0</span>
+          <button onclick="goToPly(review.index + 1)">&gt;</button>
+          <button onclick="goToPly(review.positions.length - 1)">&gt;|</button>
+        </div>
+      </section>
+
+      <aside class="panel engine-panel">
+        <div class="panel-head"><h3 id="game-title">No game selected</h3><span class="count" id="engine-state">idle</span></div>
+        <div class="engine-body">
+          <svg class="graph" id="eval-graph" viewBox="0 0 320 66" preserveAspectRatio="none"></svg>
+          <div class="accuracy-grid">
+            <div class="accuracy-card"><span class="small" id="white-name">White</span><strong id="white-accuracy">—</strong></div>
+            <div class="accuracy-card"><span class="small" id="black-name">Black</span><strong id="black-accuracy">—</strong></div>
+          </div>
+          <div class="score" id="score">—</div>
+          <div class="classification" id="classification" style="display:none;">—</div>
+          <div class="kv"><span>Move</span><strong id="move-detail">—</strong></div>
+          <div class="kv"><span>Played</span><strong id="played-move">—</strong></div>
+          <div class="kv"><span>Best</span><strong id="best-move">—</strong></div>
+          <div class="line" id="engine-line">Select a game, then run analysis.</div>
+          <button class="primary-btn" onclick="analyzeCurrentGame(true)">Analyze game</button>
+        </div>
+        <div class="move-history" id="move-history"><div class="empty">Move list appears here after selecting a game.</div></div>
+      </aside>
+    </section>
+  </main>
+
+<script src="../shared/analysis_core.js"></script>
+<script src="../shared/review_engine.js"></script>
+<script src="../shared/pgn_parser.js"></script>
+<script src="../shared/chesscom_api.js"></script>
+<script>
+const PIECES = {
+  wK:'♔', wQ:'♕', wR:'♖', wB:'♗', wN:'♘', wP:'♙',
+  bK:'♚', bQ:'♛', bR:'♜', bB:'♝', bN:'♞', bP:'♟'
+};
+const REVIEW_DEPTH = 14;
+let games = [];
+let selectedGame = null;
+let selectedGameIndex = -1;
+let engine = null;
+let analysisRun = 0;
+const analysisCache = new Map();
+let review = {
+  positions: [ChessteinPgn.fenToPosition(ChessteinPgn.START_FEN)],
+  moves: [],
+  index: 0,
+  classifications: []
+};
+
+function setStatus(message, isError = false) {
+  const el = document.getElementById('status');
+  el.textContent = message || '';
+  el.classList.toggle('error', !!isError);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+}
+
+function formatDate(epochSeconds) {
+  if (!epochSeconds) return 'unknown date';
+  return new Date(Number(epochSeconds) * 1000).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatGameMeta(game) {
+  const parts = [];
+  if (game.timeClass) parts.push(game.timeClass);
+  if (game.timeControl) parts.push(game.timeControl);
+  if (game.rated) parts.push('rated');
+  if (game.userResult) parts.push(game.userResult);
+  return parts.join(' · ');
+}
+
+async function loadGames() {
+  const username = document.getElementById('username').value.trim();
+  const months = Number(document.getElementById('month-count').value || 3);
+  if (!username) return setStatus('Enter a Chess.com username first.', true);
+  setStatus(`Loading ${username}'s recent games…`);
+  document.getElementById('game-list').innerHTML = '<div class="empty">Loading games…</div>';
+  try {
+    const raw = await ChessteinChessComApi.loadRecentGames(username, { months });
+    games = raw.filter(game => !!game.pgn).map(game => ChessteinChessComApi.normalizeGame(game, username));
+    selectedGame = null;
+    selectedGameIndex = -1;
+    document.getElementById('game-count').textContent = `${games.length} games`;
+    renderGames();
+    setStatus(games.length ? `Loaded ${games.length} games. Pick one to review.` : 'No PGN games found in those archives.');
+  } catch (error) {
+    games = [];
+    renderGames();
+    setStatus(error.message || 'Could not load Chess.com games.', true);
+  }
+}
+
+function renderGames() {
+  const list = document.getElementById('game-list');
+  if (!games.length) {
+    list.innerHTML = '<div class="empty">No games loaded yet.</div>';
+    document.getElementById('game-count').textContent = '0 games';
+    return;
+  }
+  list.innerHTML = games.map((game, index) => `
+    <button class="game-card ${index === selectedGameIndex ? 'active' : ''}" onclick="selectGame(${index})">
+      <div class="game-title"><span>${escapeHtml(game.whiteLabel)} vs ${escapeHtml(game.blackLabel)}</span><span>${escapeHtml(game.result || '')}</span></div>
+      <div class="game-meta"><span>${escapeHtml(formatDate(game.endTime))}</span><span>${escapeHtml(formatGameMeta(game))}</span></div>
+    </button>
+  `).join('');
+}
+
+function selectGame(index) {
+  const game = games[index];
+  if (!game) return;
+  try {
+    stopAnalysis();
+    analysisCache.clear();
+    const parsed = ChessteinPgn.parsePgn(game.pgn);
+    selectedGame = { ...game, parsed };
+    selectedGameIndex = index;
+    review = {
+      positions: parsed.positions,
+      moves: parsed.moves,
+      index: parsed.positions.length - 1,
+      classifications: []
+    };
+    renderGames();
+    renderAll();
+    setStatus(parsed.warnings?.length ? `Game loaded with ${parsed.warnings.length} PGN warning(s).` : 'Game loaded. Analysis starts when you press Analyze game.');
+  } catch (error) {
+    setStatus(error.message || 'Could not parse this game PGN.', true);
+  }
+}
+
+function ensureEngine() {
+  if (!window.ChessteinReviewEngine) throw new Error('Review engine loader is missing.');
+  if (!engine) engine = new window.ChessteinReviewEngine();
+  return engine.init();
+}
+
+function stopAnalysis() {
+  analysisRun += 1;
+  if (engine) engine.stop();
+  document.getElementById('engine-state').textContent = 'idle';
+}
+
+function analysisForPly(ply) {
+  const pos = review.positions[ply];
+  if (!pos) return null;
+  return analysisCache.get(pos.fen || ChessteinPgn.positionToFen(pos)) || null;
+}
+
+function classifyPly(ply) {
+  if (ply <= 0 || !review.moves[ply - 1]) return null;
+  const before = analysisForPly(ply - 1);
+  const after = analysisForPly(ply);
+  if (!before?.whiteScore || !after?.whiteScore) return null;
+  const beforePos = review.positions[ply - 1];
+  return ChessteinAnalysis.classifyMove({
+    beforeWhiteScore: before.whiteScore,
+    afterWhiteScore: after.whiteScore,
+    mover: beforePos.turn === 'w' ? 'white' : 'black',
+    playedUci: review.moves[ply - 1].uci,
+    bestUci: before.bestUci
+  });
+}
+
+function updateClassifications() {
+  review.classifications = review.moves.map((_, index) => classifyPly(index + 1));
+}
+
+async function analyzeCurrentGame(force = false) {
+  if (!selectedGame) return setStatus('Select a Chess.com game first.', true);
+  const seq = ++analysisRun;
+  const total = review.positions.length;
+  try {
+    await ensureEngine();
+    for (let ply = 0; ply < total; ply++) {
+      if (seq !== analysisRun) return;
+      const pos = review.positions[ply];
+      const fen = pos.fen || ChessteinPgn.positionToFen(pos);
+      if (analysisCache.has(fen) && !force) continue;
+      document.getElementById('engine-state').textContent = `${ply + 1}/${total}`;
+      setStatus(`Analyzing game: ${ply + 1} / ${total}`);
+      const raw = await engine.analyzeFen(fen, { depth: REVIEW_DEPTH });
+      if (seq !== analysisRun) return;
+      const analysis = ChessteinAnalysis.enrichReviewAnalysis(raw, pos, {
+        ply,
+        formatBestMove: ChessteinPgn.formatUciMoveForPosition,
+        formatLine: (pv, startPos) => ChessteinPgn.formatEngineLine(pv, startPos, 7)
+      });
+      analysisCache.set(fen, analysis);
+      updateClassifications();
+      renderAll();
+    }
+    document.getElementById('engine-state').textContent = 'complete';
+    setStatus('Analysis complete.');
+  } catch (error) {
+    if (error?.message === 'Analysis cancelled.') return;
+    document.getElementById('engine-state').textContent = 'error';
+    setStatus(error.message || 'Stockfish analysis failed.', true);
+  }
+}
+
+function goToPly(ply) {
+  review.index = Math.max(0, Math.min(review.positions.length - 1, Number(ply) || 0));
+  renderAll();
+}
+
+function currentPosition() {
+  return review.positions[review.index] || ChessteinPgn.fenToPosition(ChessteinPgn.START_FEN);
+}
+
+function renderAll() {
+  renderBoard();
+  renderEnginePanel();
+  renderMoveHistory();
+  renderEvalGraph();
+  renderAccuracy();
+}
+
+function renderBoard() {
+  const boardEl = document.getElementById('board');
+  const rankEl = document.getElementById('rank-labels');
+  const fileEl = document.getElementById('file-labels');
+  const pos = currentPosition();
+  const ranks = [7,6,5,4,3,2,1,0];
+  const files = [0,1,2,3,4,5,6,7];
+  const last = pos.lastMove || [];
+  boardEl.innerHTML = '';
+  for (const rank of ranks) {
+    for (const file of files) {
+      const idx = rank * 8 + file;
+      const sq = document.createElement('div');
+      sq.className = `sq ${((rank + file) % 2) ? 'dark' : 'light'} ${last.includes(idx) ? 'last' : ''}`;
+      sq.textContent = PIECES[pos.board[idx]] || '';
+      boardEl.appendChild(sq);
+    }
+  }
+  rankEl.innerHTML = ranks.map(rank => `<div>${rank + 1}</div>`).join('');
+  fileEl.innerHTML = files.map(file => `<div>${String.fromCharCode(97 + file)}</div>`).join('');
+  renderArrows();
+}
+
+function renderArrows() {
+  const svg = document.getElementById('arrows');
+  svg.innerHTML = '';
+  const idx = review.index;
+  const beforePos = review.positions[Math.max(0, idx - 1)] || review.positions[0];
+  const best = idx > 0 ? analysisForPly(idx - 1)?.bestUci : analysisForPly(0)?.bestUci;
+  if (!best || !beforePos) return;
+  const arrow = uciToArrow(best);
+  if (!arrow) return;
+  svg.innerHTML = `<defs><marker id="best-arrow" markerWidth="5" markerHeight="5" refX="4.4" refY="2.5" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 5 2.5 L 0 5 z" fill="var(--best)"></path></marker></defs><line x1="${arrow.x1}" y1="${arrow.y1}" x2="${arrow.x2}" y2="${arrow.y2}" stroke="var(--best)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#best-arrow)"></line>`;
+}
+
+function uciToArrow(uci) {
+  if (!/^[a-h][1-8][a-h][1-8]/.test(String(uci || ''))) return null;
+  const from = ChessteinPgn.algToIdx(uci.slice(0, 2));
+  const to = ChessteinPgn.algToIdx(uci.slice(2, 4));
+  const center = (idx) => {
+    const file = idx % 8;
+    const rank = Math.floor(idx / 8);
+    return { x: (file + 0.5) * 12.5, y: (7 - rank + 0.5) * 12.5 };
+  };
+  const a = center(from);
+  const b = center(to);
+  return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+}
+
+function renderEnginePanel() {
+  const pos = currentPosition();
+  const move = review.moves[Math.max(0, review.index - 1)] || null;
+  const analysis = analysisForPly(review.index);
+  const beforeAnalysis = review.index > 0 ? analysisForPly(review.index - 1) : analysisForPly(0);
+  const classification = classifyPly(review.index);
+  const title = selectedGame ? `${selectedGame.whiteLabel} vs ${selectedGame.blackLabel}` : 'No game selected';
+  document.getElementById('game-title').textContent = title;
+  document.getElementById('ply-counter').textContent = `${review.index} / ${Math.max(0, review.positions.length - 1)}`;
+  document.getElementById('move-detail').textContent = review.index === 0 ? 'Start position' : `${move?.color === 'white' ? Math.ceil(review.index / 2) + '.' : Math.ceil(review.index / 2) + '...'} ${move?.san || move?.uci || ''}`;
+  document.getElementById('score').textContent = analysis?.whiteScore ? ChessteinAnalysis.formatWhiteScore(analysis.whiteScore) : '—';
+  document.getElementById('played-move').textContent = move?.san || move?.uci || '—';
+  document.getElementById('best-move').textContent = beforeAnalysis?.bestDisplay || '—';
+  document.getElementById('engine-line').textContent = beforeAnalysis?.lineDisplay || (selectedGame ? 'Press Analyze game to run Stockfish.' : 'Select a game, then run analysis.');
+  const cls = document.getElementById('classification');
+  if (classification) {
+    cls.style.display = '';
+    cls.className = `classification ${classification.key}`;
+    cls.textContent = `${classification.label} · ${classification.accuracy.toFixed(0)}%`;
+  } else {
+    cls.style.display = 'none';
+    cls.textContent = '—';
+  }
+  updateEvalBar(analysis?.whiteScore || null);
+}
+
+function updateEvalBar(whiteScore) {
+  const percent = ChessteinAnalysis.scoreToWhitePercent(whiteScore);
+  document.getElementById('eval-white').style.height = `${percent}%`;
+  document.getElementById('eval-label').textContent = whiteScore ? ChessteinAnalysis.formatWhiteScore(whiteScore) : '0.0';
+}
+
+function renderMoveHistory() {
+  const el = document.getElementById('move-history');
+  if (!review.moves.length) {
+    el.innerHTML = '<div class="empty">Move list appears here after selecting a game.</div>';
+    return;
+  }
+  const rows = [];
+  for (let i = 0; i < review.moves.length; i += 2) {
+    rows.push({ num: Math.floor(i / 2) + 1, white: review.moves[i], black: review.moves[i + 1], wPly: i + 1, bPly: i + 2 });
+  }
+  el.innerHTML = rows.map(row => `
+    <div class="move-pair">
+      <span class="move-num">${row.num}.</span>
+      ${moveCellHtml(row.white, row.wPly)}
+      ${moveCellHtml(row.black, row.bPly)}
+    </div>`).join('');
+}
+
+function moveCellHtml(move, ply) {
+  if (!move) return '<span></span>';
+  const classification = review.classifications[ply - 1] || classifyPly(ply);
+  const label = classification ? `<span class="move-label ${classification.key}" title="${escapeHtml(classification.title)}">${escapeHtml(classification.shortLabel)}</span>` : '';
+  return `<span class="move-cell clickable ${review.index === ply ? 'current' : ''}" onclick="goToPly(${ply})"><span>${escapeHtml(move.san || move.uci)}</span>${label}</span>`;
+}
+
+function renderEvalGraph() {
+  const svg = document.getElementById('eval-graph');
+  svg.innerHTML = '';
+  const w = 320;
+  const h = 66;
+  const make = (tag, attrs = {}) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    return el;
+  };
+  svg.appendChild(make('line', { x1: 0, y1: h / 2, x2: w, y2: h / 2 }));
+  let path = '';
+  const n = review.positions.length;
+  for (let ply = 0; ply < n; ply++) {
+    const analysis = analysisForPly(ply);
+    if (!analysis?.whiteScore) continue;
+    const x = n <= 1 ? w / 2 : (ply / (n - 1)) * w;
+    const y = h - (ChessteinAnalysis.scoreToWhitePercent(analysis.whiteScore) / 100) * h;
+    path += `${path ? ' L' : 'M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  if (path) svg.appendChild(make('path', { d: path }));
+  const current = analysisForPly(review.index);
+  if (current?.whiteScore) {
+    const x = n <= 1 ? w / 2 : (review.index / (n - 1)) * w;
+    const y = h - (ChessteinAnalysis.scoreToWhitePercent(current.whiteScore) / 100) * h;
+    svg.appendChild(make('circle', { cx: x.toFixed(2), cy: y.toFixed(2), r: 4.5 }));
+  }
+}
+
+function renderAccuracy() {
+  const white = selectedGame?.whiteLabel || 'White';
+  const black = selectedGame?.blackLabel || 'Black';
+  document.getElementById('white-name').textContent = white;
+  document.getElementById('black-name').textContent = black;
+  const whiteApi = selectedGame?.accuracies?.white;
+  const blackApi = selectedGame?.accuracies?.black;
+  const whiteEstimate = ChessteinAnalysis.averageAccuracy(review.classifications, 'white', review.moves);
+  const blackEstimate = ChessteinAnalysis.averageAccuracy(review.classifications, 'black', review.moves);
+  document.getElementById('white-accuracy').textContent = whiteEstimate !== null ? `${whiteEstimate.toFixed(1)}%` : (whiteApi ? `${Number(whiteApi).toFixed(1)}%` : '—');
+  document.getElementById('black-accuracy').textContent = blackEstimate !== null ? `${blackEstimate.toFixed(1)}%` : (blackApi ? `${Number(blackApi).toFixed(1)}%` : '—');
+}
+
+renderAll();
+</script>
+</body>
+</html>

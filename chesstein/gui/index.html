@@ -951,7 +951,8 @@
   <div class="promotion-box" id="promo-box"></div>
 </div>
 
-<script src="review_engine.js"></script>
+<script src="../shared/analysis_core.js"></script>
+<script src="../shared/review_engine.js"></script>
 <script>
 const PIECE_ASSET_BASE = 'assets/pieces/cburnett/';
 const PIECE_IMAGES = {
@@ -1888,50 +1889,21 @@ function moveClassificationForPly(ply) {
 
   const move = reviewState.moves[ply - 1];
   const beforePos = reviewState.positions[ply - 1];
-  const mover = beforePos.turn === 'b' ? 'black' : 'white';
-  const playedUci = moveToUci(move);
-  const bestUci = before.bestUci;
-  const bestEp = expectedPointsForColor(before.whiteScore, mover);
-  const actualEp = expectedPointsForColor(after.whiteScore, mover);
-  const loss = Math.max(0, bestEp - actualEp);
-  const playedBest = !!playedUci && !!bestUci && playedUci.toLowerCase() === bestUci.toLowerCase();
-
-  let key = 'blunder';
-  if (playedBest || loss <= 0.005) key = 'best';
-  else if (loss <= 0.02) key = 'excellent';
-  else if (loss <= 0.05) key = 'good';
-  else if (loss <= 0.10) key = 'inaccuracy';
-  else if (loss <= 0.20) key = 'mistake';
-
-  const labels = {
-    best: ['Best', 'BEST'],
-    excellent: ['Excellent', 'EXC'],
-    good: ['Good', 'GOOD'],
-    inaccuracy: ['Inaccuracy', 'INACC'],
-    mistake: ['Mistake', 'MIST'],
-    blunder: ['Blunder', 'BLUN']
-  };
-  const [label, shortLabel] = labels[key] || labels.good;
-  return {
-    key,
-    label,
-    shortLabel,
-    loss,
-    playedUci,
-    bestUci,
-    title: `${label} · expected-points loss ${loss.toFixed(3)}`
-  };
+  return window.ChessteinAnalysis.classifyMove({
+    beforeWhiteScore: before.whiteScore,
+    afterWhiteScore: after.whiteScore,
+    mover: beforePos.turn === 'b' ? 'black' : 'white',
+    playedUci: moveToUci(move),
+    bestUci: before.bestUci
+  });
 }
 
 function expectedPointsForColor(whiteScore, color) {
-  const whiteEp = expectedPointsForWhite(whiteScore);
-  return color === 'black' ? 1 - whiteEp : whiteEp;
+  return window.ChessteinAnalysis.expectedPointsForColor(whiteScore, color);
 }
 
 function expectedPointsForWhite(whiteScore) {
-  if (!whiteScore) return 0.5;
-  if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 1 : 0;
-  return scoreToWhitePercent(whiteScore) / 100;
+  return window.ChessteinAnalysis.expectedPointsForWhite(whiteScore);
 }
 
 function moveClassForHistory(move, ply, pairIndex, color) {
@@ -2455,41 +2427,23 @@ function updateReviewEvalBar(whiteScore) {
 }
 
 function scoreToWhitePercent(whiteScore) {
-  if (!whiteScore) return 50;
-  if (whiteScore.type === 'mate') return whiteScore.mate > 0 ? 100 : 0;
-  const cp = Math.max(-900, Math.min(900, Number(whiteScore.cp || 0)));
-  return Math.max(2, Math.min(98, 100 / (1 + Math.exp(-cp / 170))));
+  return window.ChessteinAnalysis.scoreToWhitePercent(whiteScore);
 }
 
 function normalizeScoreForWhite(score, pos) {
-  if (!score) return null;
-  const sign = pos.turn === 'w' ? 1 : -1;
-  if (score.type === 'mate') return { type: 'mate', mate: score.value * sign };
-  return { type: 'cp', cp: score.value * sign };
+  return window.ChessteinAnalysis.normalizeScoreForWhite(score, pos);
 }
 
 function formatWhiteScore(whiteScore) {
-  if (!whiteScore) return '—';
-  if (whiteScore.type === 'mate') {
-    const sign = whiteScore.mate >= 0 ? '+' : '-';
-    return `${sign}M${Math.abs(whiteScore.mate)}`;
-  }
-  const pawns = Number(whiteScore.cp || 0) / 100;
-  const sign = pawns >= 0 ? '+' : '';
-  return `${sign}${pawns.toFixed(1)}`;
+  return window.ChessteinAnalysis.formatWhiteScore(whiteScore);
 }
 
 function enrichReviewAnalysis(raw, pos, ply = null) {
-  const bestUci = raw.bestmove && raw.bestmove !== '(none)' ? raw.bestmove : (raw.pv?.[0] || null);
-  const whiteScore = normalizeScoreForWhite(raw.score, pos);
-  return {
-    ...raw,
+  return window.ChessteinAnalysis.enrichReviewAnalysis(raw, pos, {
     ply,
-    bestUci,
-    whiteScore,
-    bestDisplay: bestUci ? formatUciMoveForPosition(bestUci, pos) : '—',
-    lineDisplay: raw.pv?.length ? formatEngineLine(raw.pv, pos, 7) : 'No principal variation.'
-  };
+    formatBestMove: formatUciMoveForPosition,
+    formatLine: (pv, startPos) => formatEngineLine(pv, startPos, 7)
+  });
 }
 
 function formatUciMoveForPosition(uci, pos) {
