@@ -426,8 +426,8 @@
 
   .review-arrows {
     position: absolute;
-    left: 2px;
-    top: calc(var(--board-top) + 2px);
+    left: 24px;
+    top: 2px;
     width: calc(var(--sq) * 8);
     height: calc(var(--sq) * 8);
     pointer-events: none;
@@ -791,8 +791,9 @@
             <option value="black">as black</option>
           </select>
           <select id="analysis-depth" onchange="updateDepthHint()">
+            <option value="adaptive" selected>adaptive 10→18</option>
             <option value="10">fast depth 10</option>
-            <option value="14" selected>normal depth 14</option>
+            <option value="14">normal depth 14</option>
             <option value="18">deep depth 18</option>
           </select>
         </div>
@@ -959,8 +960,39 @@ function safeStorageRemove(key) {
   try { localStorage.removeItem(key); } catch (_) {}
 }
 
+function analysisSetting() {
+  return String(document.getElementById('analysis-depth')?.value || 'adaptive');
+}
+
 function analyzerDepth() {
-  return Number(document.getElementById('analysis-depth')?.value || 14);
+  const setting = analysisSetting();
+  return setting === 'adaptive' ? 18 : Number(setting || 14);
+}
+
+function analysisLabel() {
+  const setting = analysisSetting();
+  return setting === 'adaptive' ? 'adaptive 10→18' : `depth ${analyzerDepth()}`;
+}
+
+function analysisOptionsForPly(ply, fen) {
+  const setting = analysisSetting();
+  if (setting !== 'adaptive') {
+    return { depth: analyzerDepth() };
+  }
+  return {
+    depth: 18,
+    progressive: true,
+    minDepth: 10,
+    stableDepths: 3,
+    scoreToleranceCp: 14,
+    maxTimeMs: 6500,
+    timeoutMs: 12000,
+    onUpdate: (partial) => {
+      if (!partial?.depth) return;
+      document.getElementById('engine-state').textContent = `${ply + 1}/${review.positions.length} · d${partial.depth}`;
+      document.getElementById('review-progress').textContent = `Adaptive analysis: position ${ply + 1} / ${review.positions.length} · depth ${partial.depth}`;
+    }
+  };
 }
 
 function gameCacheKey(username, months) {
@@ -969,7 +1001,7 @@ function gameCacheKey(username, months) {
 
 function analysisCacheKey(game = selectedGame) {
   const id = game?.uuid || game?.url || game?.pgn?.slice(0, 80) || 'unknown-game';
-  return `chesstein:chesscom:analysis:v2:${String(id).slice(0, 120)}:d${analyzerDepth()}`;
+  return `chesstein:chesscom:analysis:v3:${String(id).slice(0, 120)}:${analysisSetting()}`;
 }
 
 function loadGameListCache(username, months) {
@@ -1013,6 +1045,7 @@ function saveStoredAnalysis() {
   const entries = [...analysisCache.entries()];
   safeStorageSet(analysisCacheKey(), JSON.stringify({
     createdAt: Date.now(),
+    setting: analysisSetting(),
     depth: analyzerDepth(),
     gameId: selectedGame.uuid || selectedGame.url || '',
     entries
@@ -1022,7 +1055,7 @@ function saveStoredAnalysis() {
 
 function trimStoredAnalyses() {
   try {
-    const prefix = 'chesstein:chesscom:analysis:v2:';
+    const prefix = 'chesstein:chesscom:analysis:v';
     const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
     const dated = keys.map(key => {
       try { return { key, createdAt: JSON.parse(localStorage.getItem(key) || '{}').createdAt || 0 }; }
@@ -1169,8 +1202,8 @@ function updateDepthHint() {
   const loaded = loadStoredAnalysis();
   renderAll();
   setStatus(loaded
-    ? `Loaded cached depth ${analyzerDepth()} analysis for this game.`
-    : `Depth set to ${analyzerDepth()}. Run analysis to create a cached review.`
+    ? `Loaded cached ${analysisLabel()} analysis for this game.`
+    : `Analysis set to ${analysisLabel()}. Run analysis to create a cached review.`
   , 'alert');
 }
 
@@ -1235,7 +1268,7 @@ function selectGame(index) {
     renderAll();
     const warningText = parsed.warnings?.length ? ` PGN warnings: ${parsed.warnings.length}.` : '';
     setStatus(hadCachedAnalysis
-      ? `Loaded cached depth ${analyzerDepth()} analysis for this game.${warningText}`
+      ? `Loaded cached ${analysisLabel()} analysis for this game.${warningText}`
       : `Game loaded. Press analyze game to run Stockfish.${warningText}`
     , hadCachedAnalysis ? 'alert' : '');
   } catch (error) {
@@ -1286,6 +1319,7 @@ async function analyzeCurrentGame(force = false) {
   const seq = ++analysisRun;
   const total = review.positions.length;
   const depth = analyzerDepth();
+  const modeLabel = analysisLabel();
   document.getElementById('analyze-btn').disabled = true;
 
   try {
@@ -1297,10 +1331,10 @@ async function analyzeCurrentGame(force = false) {
       if (analysisCache.has(fen) && !force) continue;
 
       document.getElementById('engine-state').textContent = `${ply + 1}/${total}`;
-      document.getElementById('review-progress').textContent = `Analyzing depth ${depth}: ${ply + 1} / ${total}`;
+      document.getElementById('review-progress').textContent = `Analyzing ${modeLabel}: ${ply + 1} / ${total}`;
       setStatus(`Analyzing game: ${ply + 1} / ${total}`);
 
-      const raw = await engine.analyzeFen(fen, { depth });
+      const raw = await engine.analyzeFen(fen, analysisOptionsForPly(ply, fen));
       if (seq !== analysisRun) return;
 
       const analysis = ChessteinAnalysis.enrichReviewAnalysis(raw, pos, {
@@ -1317,7 +1351,7 @@ async function analyzeCurrentGame(force = false) {
     saveStoredAnalysis();
     document.getElementById('engine-state').textContent = 'complete';
     document.getElementById('analyze-btn').disabled = false;
-    setStatus(`Analysis complete at depth ${depth}. Cached locally for this browser.`, 'alert');
+    setStatus(`Analysis complete with ${modeLabel}. Cached locally for this browser.`, 'alert');
   } catch (error) {
     if (error?.message === 'Analysis cancelled.') return;
     document.getElementById('engine-state').textContent = 'error';
@@ -1386,32 +1420,18 @@ function renderArrows() {
   svg.innerHTML = '';
   const idx = review.index;
   const best = idx > 0 ? analysisForPly(idx - 1)?.bestUci : analysisForPly(0)?.bestUci;
-  const played = idx > 0 ? review.moves[idx - 1]?.uci : null;
-  const parts = [];
+  if (!best) return;
+
+  const bestArrow = uciToArrow(best);
+  if (!bestArrow) return;
+
   const marker = `<defs>
     <marker id="best-arrow" markerWidth="6" markerHeight="6" refX="5.2" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 6 3 L 0 6 z" fill="var(--accent)"></path>
     </marker>
-    <marker id="played-arrow" markerWidth="6" markerHeight="6" refX="5.2" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 6 3 L 0 6 z" fill="rgba(232,220,200,0.42)"></path>
-    </marker>
   </defs>`;
 
-  if (played && best && played.toLowerCase() !== best.toLowerCase()) {
-    const playedArrow = uciToArrow(played);
-    if (playedArrow) {
-      parts.push(`<line class="review-arrow-line" x1="${playedArrow.x1}" y1="${playedArrow.y1}" x2="${playedArrow.x2}" y2="${playedArrow.y2}" stroke="rgba(232,220,200,0.42)" marker-end="url(#played-arrow)"></line>`);
-    }
-  }
-
-  if (best) {
-    const bestArrow = uciToArrow(best);
-    if (bestArrow) {
-      parts.push(`<line class="review-arrow-line best" x1="${bestArrow.x1}" y1="${bestArrow.y1}" x2="${bestArrow.x2}" y2="${bestArrow.y2}" marker-end="url(#best-arrow)"></line>`);
-    }
-  }
-
-  svg.innerHTML = parts.length ? marker + parts.join('') : '';
+  svg.innerHTML = `${marker}<line class="review-arrow-line best" x1="${bestArrow.x1}" y1="${bestArrow.y1}" x2="${bestArrow.x2}" y2="${bestArrow.y2}" marker-end="url(#best-arrow)"></line>`;
 }
 
 function uciToArrow(uci) {
@@ -1456,7 +1476,7 @@ function renderEnginePanel() {
   }
 
   document.getElementById('review-progress').textContent = selectedGame
-    ? `${review.index} / ${Math.max(0, review.positions.length - 1)} plies · depth ${analyzerDepth()} · ${analysisCache.size}/${review.positions.length} positions analyzed`
+    ? `${review.index} / ${Math.max(0, review.positions.length - 1)} plies · ${analysisLabel()} · ${analysisCache.size}/${review.positions.length} positions analyzed`
     : 'Select a game from the match history.';
 
   updateEvalBar(analysis?.whiteScore || null);

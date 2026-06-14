@@ -162,7 +162,9 @@
           score: null,
           pv: [],
           bestmove: null,
-          rawLines: []
+          rawLines: [],
+          stoppedEarly: false,
+          stopReason: null
         };
         const timer = setTimeout(() => {
           if (this.currentSearch && this.currentSearch.ticket === ticket) {
@@ -172,7 +174,18 @@
           reject(new Error('Stockfish analysis timed out.'));
         }, Number(options.timeoutMs || SEARCH_TIMEOUT_MS));
 
-        this.currentSearch = { ticket, resolve, reject, result, timer };
+        this.currentSearch = {
+          ticket,
+          resolve,
+          reject,
+          result,
+          timer,
+          options,
+          startedAt: Date.now(),
+          lastStableSignature: null,
+          stableCount: 0,
+          stopRequested: false
+        };
         this.post(`position fen ${fen}`);
         this.post(`go depth ${Math.max(1, Math.min(30, depth))}`);
       });
@@ -212,7 +225,8 @@
       if (search.result.rawLines.length > 50) search.result.rawLines.shift();
 
       if (line.startsWith('info ')) {
-        this._parseInfoLine(line, search.result);
+        const changed = this._parseInfoLine(line, search.result);
+        if (changed) this._handleProgress(search);
         return;
       }
 
@@ -225,9 +239,63 @@
       }
     }
 
+    _handleProgress(search) {
+      const { options, result } = search;
+      if (typeof options.onUpdate === 'function') {
+        try { options.onUpdate({ ...result, pv: [...result.pv], rawLines: [...result.rawLines] }); } catch (_) {}
+      }
+      if (!options.progressive || search.stopRequested || !result.depth) return;
+
+      const minDepth = Math.max(1, Number(options.minDepth || 10));
+      const stableDepths = Math.max(1, Number(options.stableDepths || 3));
+      const maxTimeMs = Math.max(750, Number(options.maxTimeMs || 6500));
+      const elapsed = Date.now() - search.startedAt;
+
+      if (elapsed >= maxTimeMs && result.depth >= Math.max(4, minDepth - 2)) {
+        result.stoppedEarly = true;
+        result.stopReason = 'time';
+        search.stopRequested = true;
+        this.post('stop');
+        return;
+      }
+
+      if (result.depth < minDepth || !result.pv?.length || !result.score) return;
+
+      const best = result.pv[0] || '';
+      const scoreKey = this._scoreStableKey(result.score, options.scoreToleranceCp);
+      const signature = `${best}|${scoreKey}`;
+      if (signature === search.lastStableSignature) {
+        search.stableCount += 1;
+      } else {
+        search.lastStableSignature = signature;
+        search.stableCount = 1;
+      }
+
+      if (search.stableCount >= stableDepths) {
+        result.stoppedEarly = true;
+        result.stopReason = 'stable';
+        search.stopRequested = true;
+        this.post('stop');
+      }
+    }
+
+    _scoreStableKey(score, toleranceCp = 14) {
+      if (!score) return 'none';
+      if (score.type === 'mate') {
+        return `mate:${Math.sign(score.value || 0)}:${Math.min(12, Math.abs(Number(score.value || 0)))}`;
+      }
+      const bucket = Math.max(1, Number(toleranceCp || 14));
+      return `cp:${Math.round(Number(score.value || 0) / bucket)}`;
+    }
+
     _parseInfoLine(line, result) {
+      let changed = false;
       const depthMatch = line.match(/\bdepth\s+(\d+)/);
-      if (depthMatch) result.depth = Number(depthMatch[1]);
+      if (depthMatch) {
+        const depth = Number(depthMatch[1]);
+        if (depth !== result.depth) changed = true;
+        result.depth = depth;
+      }
 
       const scoreMatch = line.match(/\bscore\s+(cp|mate)\s+(-?\d+)/);
       if (scoreMatch) {
@@ -235,12 +303,15 @@
           type: scoreMatch[1],
           value: Number(scoreMatch[2])
         };
+        changed = true;
       }
 
       const pvMatch = line.match(/\bpv\s+(.+)$/);
       if (pvMatch) {
         result.pv = pvMatch[1].trim().split(/\s+/).filter(Boolean);
+        changed = true;
       }
+      return changed;
     }
   }
 
