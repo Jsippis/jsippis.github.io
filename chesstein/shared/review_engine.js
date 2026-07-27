@@ -211,9 +211,13 @@
         };
         this.post(`position fen ${fen}`);
         const go = ['go'];
-        if (searchMoves.length) go.push('searchmoves', ...searchMoves);
+        // Stockfish's UCI parser treats every token after `searchmoves` as a
+        // candidate move. Search limits therefore MUST come before searchmoves;
+        // otherwise a command such as `go searchmoves e2e4 nodes 40000` ignores
+        // the node limit and may search until our outer timeout.
         if (nodes > 0) go.push('nodes', String(Math.max(1, Math.min(5000000, Math.round(nodes)))));
         else go.push('depth', String(Math.max(1, Math.min(30, depth))));
+        if (searchMoves.length) go.push('searchmoves', ...searchMoves);
         this.post(go.join(' '));
       });
     }
