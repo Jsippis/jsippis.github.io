@@ -5,6 +5,8 @@
   const DEFAULT_ENGINE_WASM = '../gui/vendor/stockfish/stockfish-18-lite-single.wasm';
   const READY_TIMEOUT_MS = 45000;
   const UCI_RETRY_MS = 1000;
+  const READY_RETRY_MS = 350;
+  const SEARCH_SETTLE_MS = 20;
   const SEARCH_TIMEOUT_MS = 20000;
 
   function engineBaseUrl() {
@@ -85,22 +87,25 @@
         };
 
         this.worker.onmessage = (event) => {
-          const line = String(event.data || '').trim();
-          if (!line) return;
-          this._handleLine(line);
-          if (line === 'uciok') {
-            // Keep browser/report analysis as repeatable as possible. Unsupported
-            // UCI options are ignored by Stockfish, so these are safe across builds.
-            this.post('setoption name Threads value 1');
-            this.post('setoption name Hash value 32');
-            this.post('setoption name MultiPV value 1');
-            this.post('setoption name UCI_ShowWDL value true');
-            this.post('isready');
-          } else if (line === 'readyok' && !this.readyResolved) {
-            this.readyResolved = true;
-            clearTimeout(timer);
-            clearInterval(uciRetry);
-            resolve(this);
+          // Most Stockfish.js builds emit one line per message, but splitting here
+          // also handles browsers that batch multiple UCI lines together.
+          const lines = String(event.data || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+          for (const line of lines) {
+            this._handleLine(line);
+            if (line === 'uciok') {
+              // Keep browser/report analysis as repeatable as possible. Unsupported
+              // UCI options are ignored by Stockfish, so these are safe across builds.
+              this.post('setoption name Threads value 1');
+              this.post('setoption name Hash value 32');
+              this.post('setoption name MultiPV value 1');
+              this.post('setoption name UCI_ShowWDL value true');
+              this.post('isready');
+            } else if (line === 'readyok' && !this.readyResolved) {
+              this.readyResolved = true;
+              clearTimeout(timer);
+              clearInterval(uciRetry);
+              resolve(this);
+            }
           }
         };
 
@@ -162,11 +167,13 @@
         try { previous.reject(new Error('Analysis cancelled.')); } catch (_) {}
       }
       this.post('stop');
-      await this._readyCheck();
+      await this._readyCheck('before search');
       if (ticket !== this.ticket) throw new Error('Analysis cancelled.');
       if (options.clearHash) {
-        this.post('setoption name Clear Hash');
-        await this._readyCheck();
+        // This Stockfish.js build advertises the button option using value true.
+        // Supplying it explicitly is also accepted by standard UCI engines.
+        this.post('setoption name Clear Hash value true');
+        await this._readyCheck('after clearing hash');
         if (ticket !== this.ticket) throw new Error('Analysis cancelled.');
       }
 
@@ -211,19 +218,46 @@
       });
     }
 
-    _readyCheck() {
+    _readyCheck(context = 'ready check') {
       return new Promise((resolve, reject) => {
+        let settled = false;
+        const cleanup = () => {
+          clearTimeout(waiter.timer);
+          clearInterval(waiter.retryTimer);
+          this.waiters = this.waiters.filter((entry) => entry !== waiter);
+        };
         const waiter = {
           predicate: (line) => line === 'readyok',
-          resolve,
-          reject,
-          timer: setTimeout(() => {
-            this.waiters = this.waiters.filter((entry) => entry !== waiter);
-            reject(new Error('Stockfish ready check timed out.'));
-          }, READY_TIMEOUT_MS)
+          resolve: (line) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(line);
+          },
+          reject: (error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(error);
+          },
+          timer: null,
+          retryTimer: null
+        };
+        waiter.timer = setTimeout(() => {
+          const tail = this.lastLines.slice(-8).join(' | ');
+          waiter.reject(new Error(
+            `Stockfish ready check timed out (${context}).${tail ? ` Last engine output: ${tail}` : ''}`
+          ));
+        }, READY_TIMEOUT_MS);
+        // The WASM wrapper can still be unwinding from the previous async search
+        // for a few milliseconds after bestmove. If an early isready is missed,
+        // retrying is harmless and prevents a false 45-second timeout.
+        const sendReady = () => {
+          if (!settled) this.post('isready');
         };
         this.waiters.push(waiter);
-        this.post('isready');
+        sendReady();
+        waiter.retryTimer = setInterval(sendReady, READY_RETRY_MS);
       });
     }
 
@@ -255,7 +289,18 @@
         search.result.bestmove = parts[1] || null;
         clearTimeout(search.timer);
         this.currentSearch = null;
-        search.resolve({ ...search.result });
+        const completedTicket = search.ticket;
+        const completedResult = { ...search.result };
+        // Stockfish.js prints bestmove just before its async search wrapper has
+        // fully returned to the idle command loop. Let that unwind finish before
+        // the caller starts the next same-root comparison.
+        setTimeout(() => {
+          if (completedTicket !== this.ticket) {
+            search.reject(new Error('Analysis cancelled.'));
+            return;
+          }
+          search.resolve(completedResult);
+        }, SEARCH_SETTLE_MS);
       }
     }
 
