@@ -77,6 +77,98 @@ function getRoomStub(env, roomCode) {
   return env.GAME_ROOM.get(id);
 }
 
+function finiteNumber(value, min, max, name) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) {
+    throw new Error(`${name} must be between ${min} and ${max}.`);
+  }
+  return number;
+}
+
+function optionalInteger(value, min, max, name) {
+  if (value === null || value === undefined || value === '') return null;
+  return Math.round(finiteNumber(value, min, max, name));
+}
+
+function safeText(value, maxLength, name) {
+  const text = String(value || '').trim();
+  if (!text || text.length > maxLength) throw new Error(`${name} is invalid.`);
+  return text;
+}
+
+function parseCalibrationSample(body) {
+  const features = body?.features || {};
+  const sampleId = safeText(body?.sampleId, 64, 'sampleId').toLowerCase();
+  const gameHash = safeText(body?.gameHash, 64, 'gameHash').toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(sampleId) || !/^[a-f0-9]{64}$/.test(gameHash)) {
+    throw new Error('Calibration hashes must be SHA-256 hex values.');
+  }
+  const playerColor = body?.playerColor === 'black' ? 'black' : body?.playerColor === 'white' ? 'white' : null;
+  if (!playerColor) throw new Error('playerColor must be white or black.');
+
+  const createdAt = String(body?.createdAt || '');
+  if (!Number.isFinite(Date.parse(createdAt))) throw new Error('createdAt must be an ISO date.');
+
+  return {
+    sampleId,
+    gameHash,
+    playerColor,
+    ratingBucket: optionalInteger(body?.ratingBucket, 0, 4000, 'ratingBucket'),
+    timeClass: String(body?.timeClass || '').trim().slice(0, 20),
+    moveCount: Math.round(finiteNumber(body?.moveCount, 1, 1000, 'moveCount')),
+    engineVersion: safeText(body?.engineVersion, 80, 'engineVersion'),
+    analysisProfile: safeText(body?.analysisProfile, 80, 'analysisProfile'),
+    featureVersion: Math.round(finiteNumber(body?.featureVersion, 1, 1000, 'featureVersion')),
+    formulaVersion: safeText(body?.formulaVersion, 80, 'formulaVersion'),
+    meanMoveAccuracy: finiteNumber(features.meanMoveAccuracy, 0, 100, 'meanMoveAccuracy'),
+    weightedMeanAccuracy: finiteNumber(features.weightedMeanAccuracy, 0, 100, 'weightedMeanAccuracy'),
+    geometricMeanAccuracy: finiteNumber(features.geometricMeanAccuracy, 0, 100, 'geometricMeanAccuracy'),
+    worstQuartileAccuracy: finiteNumber(features.worstQuartileAccuracy, 0, 100, 'worstQuartileAccuracy'),
+    meanExpectedLoss: finiteNumber(features.meanExpectedLoss, 0, 1, 'meanExpectedLoss'),
+    totalExpectedLoss: finiteNumber(features.totalExpectedLoss, 0, 1000, 'totalExpectedLoss'),
+    worstExpectedLoss: finiteNumber(features.worstExpectedLoss, 0, 1, 'worstExpectedLoss'),
+    worstThreeExpectedLoss: finiteNumber(features.worstThreeExpectedLoss, 0, 1, 'worstThreeExpectedLoss'),
+    bestMoveRate: finiteNumber(features.bestMoveRate, 0, 1, 'bestMoveRate'),
+    inaccuracies: Math.round(finiteNumber(features.inaccuracies, 0, 1000, 'inaccuracies')),
+    mistakes: Math.round(finiteNumber(features.mistakes, 0, 1000, 'mistakes')),
+    blunders: Math.round(finiteNumber(features.blunders, 0, 1000, 'blunders')),
+    decisiveErrors: Math.round(finiteNumber(features.decisiveErrors, 0, 1000, 'decisiveErrors')),
+    mateTransitions: Math.round(finiteNumber(features.mateTransitions, 0, 1000, 'mateTransitions')),
+    forcedMoves: Math.round(finiteNumber(features.forcedMoves, 0, 1000, 'forcedMoves')),
+    settledMoves: Math.round(finiteNumber(features.settledMoves, 0, 1000, 'settledMoves')),
+    meaningfulMoves: Math.round(finiteNumber(features.meaningfulMoves, 0, 1000, 'meaningfulMoves')),
+    chesscomAccuracy: finiteNumber(body?.chesscomAccuracy, 0, 100, 'chesscomAccuracy'),
+    chessteinAccuracy: finiteNumber(body?.chessteinAccuracy, 0, 100, 'chessteinAccuracy'),
+    createdAt: new Date(createdAt).toISOString(),
+  };
+}
+
+async function storeCalibrationSample(env, sample) {
+  if (!env.CALIBRATION_DB) throw new Error('Calibration database binding is not configured.');
+  return env.CALIBRATION_DB.prepare(`
+    INSERT OR IGNORE INTO calibration_samples (
+      sample_id, game_hash, player_color, rating_bucket, time_class, move_count,
+      engine_version, analysis_profile, feature_version, formula_version,
+      mean_move_accuracy, weighted_mean_accuracy, geometric_mean_accuracy,
+      worst_quartile_accuracy, mean_expected_loss, total_expected_loss,
+      worst_expected_loss, worst_three_expected_loss, best_move_rate,
+      inaccuracies, mistakes, blunders, decisive_errors, mate_transitions,
+      forced_moves, settled_moves, meaningful_moves,
+      chesscom_accuracy, chesstein_accuracy, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    sample.sampleId, sample.gameHash, sample.playerColor, sample.ratingBucket,
+    sample.timeClass, sample.moveCount, sample.engineVersion, sample.analysisProfile,
+    sample.featureVersion, sample.formulaVersion, sample.meanMoveAccuracy,
+    sample.weightedMeanAccuracy, sample.geometricMeanAccuracy, sample.worstQuartileAccuracy,
+    sample.meanExpectedLoss, sample.totalExpectedLoss, sample.worstExpectedLoss,
+    sample.worstThreeExpectedLoss, sample.bestMoveRate, sample.inaccuracies,
+    sample.mistakes, sample.blunders, sample.decisiveErrors, sample.mateTransitions,
+    sample.forcedMoves, sample.settledMoves, sample.meaningfulMoves,
+    sample.chesscomAccuracy, sample.chessteinAccuracy, sample.createdAt
+  ).run();
+}
+
 async function validateLobbyRooms(env, rooms) {
   const lobby = getLobbyStub(env);
   const visible = [];
@@ -119,7 +211,58 @@ export default {
           listRooms: 'GET /api/rooms',
           roomSnapshot: 'GET /api/rooms/:roomCode',
           websocket: 'GET /ws/rooms/:roomCode',
+          calibration: 'POST /api/calibration',
+          calibrationStats: 'GET /api/calibration/stats',
         },
+      });
+    }
+
+
+    if (request.method === 'POST' && url.pathname === '/api/calibration') {
+      if (!env.CALIBRATION_DB) {
+        return jsonResponse(request, env, { ok: false, error: 'calibration_not_configured' }, 503);
+      }
+      const contentLength = Number(request.headers.get('content-length') || 0);
+      if (contentLength > 32_000) return badRequest(request, env, 'Calibration payload is too large.');
+      let sample;
+      try {
+        sample = parseCalibrationSample(await parseJson(request));
+      } catch (error) {
+        return badRequest(request, env, error?.message || 'Invalid calibration sample.');
+      }
+      try {
+        const result = await storeCalibrationSample(env, sample);
+        return jsonResponse(request, env, {
+          ok: true,
+          sampleId: sample.sampleId,
+          inserted: Number(result?.meta?.changes || 0) > 0,
+        }, 202);
+      } catch (error) {
+        return jsonResponse(request, env, {
+          ok: false,
+          error: 'calibration_store_failed',
+          message: error?.message || 'Could not store calibration sample.',
+        }, 500);
+      }
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/calibration/stats') {
+      if (!env.CALIBRATION_DB) {
+        return jsonResponse(request, env, { ok: false, error: 'calibration_not_configured' }, 503);
+      }
+      const totals = await env.CALIBRATION_DB.prepare(`
+        SELECT COUNT(*) AS samples,
+               COUNT(DISTINCT game_hash) AS games,
+               AVG(ABS(chesscom_accuracy - chesstein_accuracy)) AS mean_absolute_error
+        FROM calibration_samples
+      `).first();
+      return jsonResponse(request, env, {
+        ok: true,
+        samples: Number(totals?.samples || 0),
+        games: Number(totals?.games || 0),
+        meanAbsoluteError: totals?.mean_absolute_error === null || totals?.mean_absolute_error === undefined
+          ? null
+          : Number(totals.mean_absolute_error),
       });
     }
 

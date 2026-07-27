@@ -94,6 +94,7 @@
             this.post('setoption name Threads value 1');
             this.post('setoption name Hash value 32');
             this.post('setoption name MultiPV value 1');
+            this.post('setoption name UCI_ShowWDL value true');
             this.post('isready');
           } else if (line === 'readyok' && !this.readyResolved) {
             this.readyResolved = true;
@@ -148,6 +149,10 @@
       await this.init();
 
       const depth = Number(options.depth || 12);
+      const nodes = Number(options.nodes || 0);
+      const searchMoves = (Array.isArray(options.searchMoves) ? options.searchMoves : [options.searchMoves])
+        .map((move) => String(move || '').trim().toLowerCase())
+        .filter((move) => /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move));
       const ticket = ++this.ticket;
 
       if (this.currentSearch) {
@@ -170,6 +175,7 @@
           fen,
           depth: 0,
           score: null,
+          wdl: null,
           pv: [],
           bestmove: null,
           rawLines: [],
@@ -197,7 +203,11 @@
           stopRequested: false
         };
         this.post(`position fen ${fen}`);
-        this.post(`go depth ${Math.max(1, Math.min(30, depth))}`);
+        const go = ['go'];
+        if (searchMoves.length) go.push('searchmoves', ...searchMoves);
+        if (nodes > 0) go.push('nodes', String(Math.max(1, Math.min(5000000, Math.round(nodes)))));
+        else go.push('depth', String(Math.max(1, Math.min(30, depth))));
+        this.post(go.join(' '));
       });
     }
 
@@ -312,6 +322,16 @@
         result.score = {
           type: scoreMatch[1],
           value: Number(scoreMatch[2])
+        };
+        changed = true;
+      }
+
+      const wdlMatch = line.match(/\bwdl\s+(\d+)\s+(\d+)\s+(\d+)/);
+      if (wdlMatch) {
+        result.wdl = {
+          win: Number(wdlMatch[1]),
+          draw: Number(wdlMatch[2]),
+          loss: Number(wdlMatch[3])
         };
         changed = true;
       }

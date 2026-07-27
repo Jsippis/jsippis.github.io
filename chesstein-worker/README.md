@@ -186,3 +186,70 @@ Add more origins in `ALLOWED_ORIGINS` if needed.
 Bridge clients can send `physical_lift` and `physical_place` messages while they are a seated physical-board player. The room broadcasts those events to all connected clients so companion browsers can highlight the legal moves that the physical LEDs are showing.
 
 After a game is finished, seated players may use the existing `rematch_offer` / `rematch_accept` flow. The Python bridge maps the physical board reset button to those messages.
+
+## Anonymous analysis calibration (D1)
+
+The Chess.com analyzer can optionally upload anonymous summary measurements so Chesstein's deterministic accuracy formula can be calibrated against Chess.com's published game-level accuracy. It does **not** upload usernames, the PGN, or the Chess.com game URL. It sends a SHA-256 game hash, rating bucket, time class, versioned analysis features, and both final accuracy values.
+
+The Worker endpoint is already implemented at:
+
+```text
+POST /api/calibration
+```
+
+The endpoint returns `503 calibration_not_configured` until a D1 binding named `CALIBRATION_DB` is added.
+
+### One-time D1 setup
+
+Create the database:
+
+```powershell
+cd chesstein-worker
+npm install
+npm run d1:create
+```
+
+Wrangler prints a `database_id`. Add this block to `wrangler.jsonc` after `vars` using that real ID:
+
+```jsonc
+"d1_databases": [
+  {
+    "binding": "CALIBRATION_DB",
+    "database_name": "chesstein-calibration",
+    "database_id": "PASTE_THE_ID_FROM_WRANGLER_HERE",
+    "migrations_dir": "migrations"
+  }
+],
+```
+
+Apply the table migration locally for development:
+
+```powershell
+npm run d1:migrate:local
+```
+
+Apply it to the production database:
+
+```powershell
+npm run d1:migrate:remote
+```
+
+Then deploy the Worker:
+
+```powershell
+npm run deploy
+```
+
+Check aggregate calibration status:
+
+```powershell
+curl https://chesstein.jospire1.workers.dev/api/calibration/stats
+```
+
+Or query it through Wrangler:
+
+```powershell
+npm run d1:stats
+```
+
+The browser keeps only failed uploads in an IndexedDB retry queue. Successfully uploaded samples are stored permanently in D1 and removed from the local queue.

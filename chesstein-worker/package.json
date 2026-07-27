@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "d1:create": "wrangler d1 create chesstein-calibration",
+    "d1:migrate:local": "wrangler d1 migrations apply chesstein-calibration --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply chesstein-calibration --remote",
+    "d1:stats": "wrangler d1 execute chesstein-calibration --remote --command=\"SELECT COUNT(*) AS samples, COUNT(DISTINCT game_hash) AS games, AVG(ABS(chesscom_accuracy - chesstein_accuracy)) AS mean_absolute_error FROM calibration_samples\""
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
