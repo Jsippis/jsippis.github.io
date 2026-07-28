@@ -807,7 +807,7 @@
         </div>
         <input id="opponent-filter" placeholder="filter opponent or opening" autocomplete="off" oninput="renderGames()" />
         <div id="status-text">Enter a Chess.com username to load recent public games.</div>
-        <div class="small">Reports use a fixed node budget and compare the best move with the played move from the same position. Live engine can go deeper while you browse without rewriting the cached report.</div>
+        <div class="small">Reports use fixed-node same-root comparisons, WDL outcome loss, and mate/conversion penalties. Live engine can go deeper while you browse without rewriting the cached report.</div>
         <label class="calibration-optin">
           <input id="calibration-opt-in" type="checkbox" onchange="setCalibrationOptIn(this.checked)" />
           <span>Help improve Chesstein accuracy by sharing anonymous summary measurements when Chess.com accuracy is available.</span>
@@ -926,7 +926,7 @@
     </section>
   </main>
 
-<script src="../shared/analysis_core.js"></script>
+<script src="../shared/analysis_core.js?v=8-conversion-aware"></script>
 <script src="../shared/review_engine.js?v=7-searchmovesfix"></script>
 <script src="../shared/pgn_parser.js"></script>
 <script src="../shared/chesscom_api.js"></script>
@@ -939,7 +939,7 @@ const PIECE_FALLBACK = {
 const PIECE_ASSET_ROOT = '../gui/assets/pieces/cburnett/';
 const GAME_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_STORED_ANALYSES = 8;
-const REPORT_CACHE_VERSION = 'v6-searchmoves-order';
+const REPORT_CACHE_VERSION = 'v7-conversion-aware';
 const ENGINE_VERSION = 'stockfish-18-lite-single';
 const CALIBRATION_ENDPOINT = 'https://chesstein.jospire1.workers.dev/api/calibration';
 const CALIBRATION_OPT_IN_KEY = 'chesstein:calibration:opt-in:v1';
@@ -1061,14 +1061,26 @@ async function buildCalibrationSample(color, summary, gameHash) {
       totalExpectedLoss: summary.totalExpectedLoss,
       worstExpectedLoss: summary.worstExpectedLoss,
       worstThreeExpectedLoss: summary.worstThreeExpectedLoss,
+      meanScoringLoss: summary.meanScoringLoss,
+      worstScoringLoss: summary.worstScoringLoss,
+      meanConversionLoss: summary.meanConversionLoss,
+      totalConversionLoss: summary.totalConversionLoss,
       bestMoveRate: summary.bestMoveRate,
+      exactBestMoves: summary.exactBestMoves,
       inaccuracies: summary.counts.inaccuracy,
       mistakes: summary.counts.mistake,
       blunders: summary.counts.blunder,
       decisiveErrors: summary.decisiveErrors,
       mateTransitions: summary.mateTransitions,
+      slowerMateMoves: summary.slowerMateMoves,
+      totalMateDelay: summary.totalMateDelay,
+      missedForcedMates: summary.missedForcedMates,
       forcedMoves: summary.forcedMoves,
       settledMoves: summary.settledMoves,
+      settledWinningMoves: summary.settledWinningMoves,
+      settledLosingMoves: summary.settledLosingMoves,
+      nonBestWinningMoves: summary.nonBestWinningMoves,
+      conversionMoves: summary.conversionMoves,
       meaningfulMoves: summary.meaningfulMoves
     },
     chesscomAccuracy,
@@ -1487,7 +1499,8 @@ function classifyPly(ply) {
     mover: beforePos.turn === 'w' ? 'white' : 'black',
     playedUci: review.moves[ply - 1].uci,
     bestUci: best.bestUci,
-    legalMoveCount: stored?.legalMoveCount
+    legalMoveCount: stored?.legalMoveCount,
+    sameRootComparison: true
   });
 }
 
@@ -1568,7 +1581,8 @@ async function analyzeCurrentGame(force = false) {
         mover: pos.turn === 'w' ? 'white' : 'black',
         playedUci: move.uci,
         bestUci: bestAnalysis.bestUci,
-        legalMoveCount
+        legalMoveCount,
+        sameRootComparison: true
       });
 
       moveAnalysis.set(ply, {
@@ -1593,7 +1607,7 @@ async function analyzeCurrentGame(force = false) {
     reportAnalyzing = false;
     document.getElementById('engine-state').textContent = 'report complete';
     document.getElementById('analyze-btn').disabled = false;
-    setStatus(`Stable ${modeLabel} complete. Same-root WDL comparisons are cached and repeatable.`, 'alert');
+    setStatus(`Stable ${modeLabel} complete. Conversion-aware same-root comparisons are cached and repeatable.`, 'alert');
     await submitCalibrationSamples();
     scheduleLiveAnalysis();
   } catch (error) {

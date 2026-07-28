@@ -253,3 +253,19 @@ npm run d1:stats
 ```
 
 The browser keeps only failed uploads in an IndexedDB retry queue. Successfully uploaded samples are stored permanently in D1 and removed from the local queue.
+
+### Conversion-feature migration
+
+The conversion-aware analysis adds calibration columns for exact-best moves,
+slower/missed mates, settled winning/losing positions, and conversion loss.
+After pulling this version, apply the new migration before deploying the Worker:
+
+```powershell
+cd chesstein-worker
+npm.cmd run d1:migrate:remote
+npm.cmd run deploy
+```
+
+Wrangler should apply `0002_conversion_features.sql`. Existing calibration rows
+remain valid and keep zero defaults for the newly added fields; new rows are
+separated by `feature_version` and `formula_version`.
