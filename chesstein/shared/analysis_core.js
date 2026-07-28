@@ -10,7 +10,7 @@
     blunder: ['Blunder', 'BLUN']
   };
 
-  const ANALYSIS_FORMULA_VERSION = 'conversion-aware-wdl-v4';
+  const ANALYSIS_FORMULA_VERSION = 'contextual-conversion-v5';
   const ANALYSIS_FEATURE_VERSION = 4;
 
   function clamp(value, min, max) {
@@ -395,16 +395,36 @@
     const sorted = (meaningfulAccuracies.length ? meaningfulAccuracies : accuracies).slice().sort((a, b) => a - b);
     const worstCount = Math.max(1, Math.ceil(sorted.length * 0.25));
     const worstQuartileAccuracy = mean(sorted.slice(0, worstCount));
-    const accuracy = clamp(
-      0.75 * weightedMean + 0.15 * geometricMean + 0.10 * worstQuartileAccuracy,
-      0,
-      100
-    );
+    // Use the weighted mean as the stable base. The older blend gave the
+    // geometric mean and worst quartile too much influence, which could punish
+    // the losing player twice for the same few decisive errors. A small tail
+    // spread penalty preserves sensitivity to bad moves without crushing the
+    // whole report.
+    const tailPenalty = Math.min(4, Math.max(0, weightedMean - worstQuartileAccuracy) * 0.02);
+
+    // WDL saturates once a position is won, so move-level scores alone still
+    // under-punish repeated inefficient conversion. Scale the accumulated
+    // conversion loss by the number of winning-position opportunities, then add
+    // explicit penalties for missed or slower mates. This only applies while the
+    // player was already winning; it does not further punish forced defence in a
+    // lost position.
+    const conversionPenalty = settledWinningMoves > 0
+      ? Math.min(18,
+          500 * (conversionLosses.reduce((sum, value) => sum + value, 0) / settledWinningMoves)
+          + 1.25 * missedForcedMates
+          + 0.40 * slowerMateMoves
+          + 0.20 * totalMateDelay)
+      : 0;
+
+    const accuracy = clamp(weightedMean - tailPenalty - conversionPenalty, 0, 100);
 
     const sortedExpectedLosses = expectedLosses.slice().sort((a, b) => b - a);
     const sortedScoringLosses = scoringLosses.slice().sort((a, b) => b - a);
     return {
       accuracy,
+      baseAccuracy: weightedMean,
+      tailPenalty,
+      conversionPenalty,
       weightedMeanAccuracy: weightedMean,
       geometricMeanAccuracy: geometricMean,
       worstQuartileAccuracy,

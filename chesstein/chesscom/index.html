@@ -926,8 +926,8 @@
     </section>
   </main>
 
-<script src="../shared/analysis_core.js?v=8-conversion-aware"></script>
-<script src="../shared/review_engine.js?v=7-searchmovesfix"></script>
+<script src="../shared/analysis_core.js?v=9-contextual-v5"></script>
+<script src="../shared/review_engine.js?v=8-engine-isolation"></script>
 <script src="../shared/pgn_parser.js"></script>
 <script src="../shared/chesscom_api.js"></script>
 <script src="../shared/calibration_store.js"></script>
@@ -939,7 +939,7 @@ const PIECE_FALLBACK = {
 const PIECE_ASSET_ROOT = '../gui/assets/pieces/cburnett/';
 const GAME_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_STORED_ANALYSES = 8;
-const REPORT_CACHE_VERSION = 'v7-conversion-aware';
+const REPORT_CACHE_VERSION = 'v8-contextual-engine-isolation';
 const ENGINE_VERSION = 'stockfish-18-lite-single';
 const CALIBRATION_ENDPOINT = 'https://chesstein.jospire1.workers.dev/api/calibration';
 const CALIBRATION_OPT_IN_KEY = 'chesstein:calibration:opt-in:v1';
@@ -953,7 +953,8 @@ let games = [];
 let selectedGame = null;
 let selectedGameIndex = -1;
 let currentUsername = '';
-let engine = null;
+let reportEngine = null;
+let liveEngine = null;
 let analysisRun = 0;
 let liveRun = 0;
 let liveTimer = null;
@@ -1448,10 +1449,29 @@ function selectGame(index) {
   }
 }
 
-function ensureEngine() {
+function createEngine() {
   if (!window.ChessteinReviewEngine) throw new Error('Review engine loader is missing.');
-  if (!engine) engine = new window.ChessteinReviewEngine();
-  return engine.init();
+  return new window.ChessteinReviewEngine();
+}
+
+function disposeReportEngine() {
+  if (!reportEngine) return;
+  try { reportEngine.dispose(); } catch (_) {}
+  reportEngine = null;
+}
+
+function disposeLiveEngine() {
+  if (!liveEngine) return;
+  try { liveEngine.dispose(); } catch (_) {}
+  liveEngine = null;
+}
+
+async function startFreshReportEngine() {
+  disposeLiveEngine();
+  disposeReportEngine();
+  reportEngine = createEngine();
+  await reportEngine.init();
+  return reportEngine;
 }
 
 function stopAnalysis() {
@@ -1462,7 +1482,8 @@ function stopAnalysis() {
     clearTimeout(liveTimer);
     liveTimer = null;
   }
-  if (engine) engine.stop();
+  disposeLiveEngine();
+  disposeReportEngine();
   document.getElementById('engine-state').textContent = 'idle';
   document.getElementById('analyze-btn').disabled = false;
 }
@@ -1520,7 +1541,7 @@ async function analyzePositionBest(pos, ply) {
   const fen = pos.fen || ChessteinPgn.positionToFen(pos);
   const cached = analysisCache.get(fen);
   if (cached) return cached;
-  const raw = await engine.analyzeFen(fen, analysisOptions());
+  const raw = await reportEngine.analyzeFen(fen, analysisOptions());
   const analysis = enrichReportAnalysis(raw, pos, ply);
   analysis.reportNodes = analyzerNodes();
   analysis.reportProfile = analysisSetting();
@@ -1531,6 +1552,7 @@ async function analyzePositionBest(pos, ply) {
 async function analyzeCurrentGame(force = false) {
   if (!selectedGame) return setStatus('Select a Chess.com game first.', 'error');
   stopLiveAnalysisOnly();
+  disposeReportEngine();
   const seq = ++analysisRun;
   reportAnalyzing = true;
   const totalMoves = review.moves.length;
@@ -1545,7 +1567,7 @@ async function analyzeCurrentGame(force = false) {
   }
 
   try {
-    await ensureEngine();
+    await startFreshReportEngine();
     for (let moveIndex = 0; moveIndex < totalMoves; moveIndex++) {
       if (seq !== analysisRun) return;
       const ply = moveIndex + 1;
@@ -1564,7 +1586,7 @@ async function analyzeCurrentGame(force = false) {
       const playedMatchesBest = String(bestAnalysis.bestUci || '').toLowerCase() === String(move.uci || '').toLowerCase();
       let playedAnalysis = bestAnalysis;
       if (!playedMatchesBest) {
-        const playedRaw = await engine.analyzeFen(fen, analysisOptions([move.uci]));
+        const playedRaw = await reportEngine.analyzeFen(fen, analysisOptions([move.uci]));
         if (seq !== analysisRun) return;
         playedAnalysis = enrichReportAnalysis(playedRaw, pos, moveIndex);
         playedAnalysis.reportNodes = nodes;
@@ -1609,12 +1631,14 @@ async function analyzeCurrentGame(force = false) {
     document.getElementById('analyze-btn').disabled = false;
     setStatus(`Stable ${modeLabel} complete. Conversion-aware same-root comparisons are cached and repeatable.`, 'alert');
     await submitCalibrationSamples();
+    disposeReportEngine();
     scheduleLiveAnalysis();
   } catch (error) {
     reportAnalyzing = false;
     if (error?.message === 'Analysis cancelled.') return;
     document.getElementById('engine-state').textContent = 'error';
     document.getElementById('analyze-btn').disabled = false;
+    disposeReportEngine();
     setStatus(error.message || 'Stockfish analysis failed.', 'error');
   }
 }
@@ -1626,7 +1650,7 @@ function stopLiveAnalysisOnly() {
     clearTimeout(liveTimer);
     liveTimer = null;
   }
-  if (engine) engine.stop();
+  disposeLiveEngine();
 }
 
 function scheduleLiveAnalysis() {
@@ -1643,14 +1667,19 @@ async function runLiveAnalysis(ply) {
   if (!pos) return;
   const seq = ++liveRun;
   const fen = pos.fen || ChessteinPgn.positionToFen(pos);
+  let localEngine = null;
   try {
-    await ensureEngine();
+    disposeLiveEngine();
+    localEngine = createEngine();
+    liveEngine = localEngine;
+    await localEngine.init();
+    if (seq !== liveRun || ply !== review.index) throw new Error('Analysis cancelled.');
     const makeLive = (raw) => ChessteinAnalysis.enrichReviewAnalysis(raw, pos, {
       ply,
       formatBestMove: ChessteinPgn.formatUciMoveForPosition,
       formatLine: (pv, startPos) => ChessteinPgn.formatEngineLine(pv, startPos, 7)
     });
-    const raw = await engine.analyzeFen(fen, {
+    const raw = await localEngine.analyzeFen(fen, {
       depth: LIVE_PROFILE.depth,
       progressive: true,
       minDepth: LIVE_PROFILE.minDepth,
@@ -1672,7 +1701,12 @@ async function runLiveAnalysis(ply) {
     document.getElementById('engine-state').textContent = `live d${liveAnalysis.liveDepth}`;
     renderEnginePanel();
   } catch (error) {
-    if (error?.message === 'Analysis cancelled.') return;
+    if (error?.message !== 'Analysis cancelled.') {
+      console.warn('Live Stockfish analysis failed:', error);
+    }
+  } finally {
+    if (liveEngine === localEngine) liveEngine = null;
+    try { localEngine?.dispose(); } catch (_) {}
   }
 }
 

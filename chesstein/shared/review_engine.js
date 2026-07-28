@@ -34,6 +34,8 @@
       this.currentSearch = null;
       this.ticket = 0;
       this.lastLines = [];
+      this.initReject = null;
+      this.lifecycle = 0;
     }
 
     isSupported() {
@@ -55,10 +57,12 @@
         const fail = (error) => {
           if (this.readyResolved || this.readyRejected) return;
           this.readyRejected = true;
+          this.initReject = null;
           clearTimeout(timer);
           clearInterval(uciRetry);
           reject(error instanceof Error ? error : new Error(String(error)));
         };
+        this.initReject = fail;
 
         try {
           // Stockfish.js can find the matching .wasm when the worker script and
@@ -102,6 +106,7 @@
               this.post('isready');
             } else if (line === 'readyok' && !this.readyResolved) {
               this.readyResolved = true;
+              this.initReject = null;
               clearTimeout(timer);
               clearInterval(uciRetry);
               resolve(this);
@@ -138,7 +143,17 @@
     }
 
     dispose() {
+      this.lifecycle += 1;
       this.stop();
+      const cancellation = new Error('Analysis cancelled.');
+      if (this.initReject) {
+        try { this.initReject(cancellation); } catch (_) {}
+        this.initReject = null;
+      }
+      for (const waiter of [...this.waiters]) {
+        try { waiter.reject(cancellation); } catch (_) {}
+      }
+      this.waiters = [];
       if (this.worker) {
         try { this.post('quit'); } catch (_) {}
         try { this.worker.terminate(); } catch (_) {}
@@ -147,11 +162,13 @@
       this.readyPromise = null;
       this.readyResolved = false;
       this.readyRejected = false;
-      this.waiters = [];
+      this.currentSearch = null;
     }
 
     async analyzeFen(fen, options = {}) {
+      const lifecycle = this.lifecycle;
       await this.init();
+      if (lifecycle !== this.lifecycle || !this.worker) throw new Error('Analysis cancelled.');
 
       const depth = Number(options.depth || 12);
       const nodes = Number(options.nodes || 0);
