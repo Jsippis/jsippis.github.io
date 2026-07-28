@@ -10,8 +10,8 @@
     blunder: ['Blunder', 'BLUN']
   };
 
-  const ANALYSIS_FORMULA_VERSION = 'contextual-conversion-v5';
-  const ANALYSIS_FEATURE_VERSION = 4;
+  const ANALYSIS_FORMULA_VERSION = 'phase-aware-conversion-v6';
+  const ANALYSIS_FEATURE_VERSION = 5;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, Number(value)));
@@ -146,6 +146,9 @@
       mateDelay: 0,
       slowerMate: false,
       missedForcedMate: false,
+      forcedMateLost: false,
+      immediateMateMissed: false,
+      missedMateSeverity: 0,
       cpGap: 0
     };
 
@@ -164,14 +167,25 @@
         return result;
       }
 
+      result.forcedMateLost = true;
+      result.immediateMateMissed = Math.abs(bestMate) <= 1;
+      result.missedMateSeverity = result.immediateMateMissed
+        ? 1
+        : Math.abs(bestMate) <= 3
+          ? 0.75
+          : Math.abs(bestMate) <= 6
+            ? 0.45
+            : 0.25;
+
       // The best move had a proven mate, but the played move no longer shows one
-      // at the same node budget. If the result is still overwhelmingly winning,
-      // treat it as an inefficient/missed conversion rather than a blunder.
+      // at the same node budget. If the position is still overwhelmingly winning,
+      // treat this as a conversion event. If it is no longer winning, the normal
+      // expected-points/decisive-error path supplies the punishment instead.
       if (actualEp >= 0.95) {
         result.missedForcedMate = true;
         result.conversionLoss = bestMate <= 1 ? 0.085 : bestMate <= 3 ? 0.070 : 0.055;
-        return result;
       }
+      return result;
     }
 
     if (bestEp >= 0.975 && actualEp >= 0.95) {
@@ -267,7 +281,7 @@
       // Easy best moves in a won position should not inflate the report, while
       // unnecessary detours and missed mates still need to count meaningfully.
       if (playedBest) decisionWeight = 0.25;
-      else if (conversion.conversionLoss >= 0.02 || conversion.slowerMate || conversion.missedForcedMate) decisionWeight = 1;
+      else if (conversion.conversionLoss >= 0.02 || conversion.slowerMate || conversion.missedForcedMate || conversion.forcedMateLost) decisionWeight = 1;
       else decisionWeight = 0.55;
     }
     if (decisiveError) decisionWeight = Math.max(decisionWeight, mateTransition ? 1.8 : 1.5);
@@ -278,6 +292,7 @@
     if (conversion.conversionLoss > 0) details.push(`conversion loss ${conversion.conversionLoss.toFixed(3)}`);
     if (conversion.slowerMate) details.push(`mate delayed by ${conversion.mateDelay}`);
     if (conversion.missedForcedMate) details.push('missed forced mate');
+    if (conversion.immediateMateMissed) details.push('missed immediate mate');
     if (mateTransition) details.push('allowed forced mate');
 
     return {
@@ -307,8 +322,12 @@
       mateDelay: conversion.mateDelay,
       slowerMate: conversion.slowerMate,
       missedForcedMate: conversion.missedForcedMate,
+      forcedMateLost: conversion.forcedMateLost,
+      immediateMateMissed: conversion.immediateMateMissed,
+      missedMateSeverity: conversion.missedMateSeverity,
       cpGap: conversion.cpGap,
       nonBestWinningMove: settledWinning && !playedBest,
+      phase: settledWinning ? 'winning' : settledLosing ? 'losing' : 'competitive',
       decisionWeight,
       meaningful: decisionWeight >= 0.5,
       title: `${label}${details.length ? ` · ${details.join(' · ')}` : ''}`
@@ -344,6 +363,12 @@
     const scoringLosses = [];
     const conversionLosses = [];
     const counts = { best: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+    const phases = {
+      competitive: { weightedTotal: 0, weightTotal: 0, accuracies: [], entries: 0 },
+      winning: { weightedTotal: 0, weightTotal: 0, accuracies: [], entries: 0 },
+      losing: { weightedTotal: 0, weightTotal: 0, accuracies: [], entries: 0 }
+    };
+
     let decisiveErrors = 0;
     let mateTransitions = 0;
     let forcedMoves = 0;
@@ -354,16 +379,30 @@
     let exactBestMoves = 0;
     let slowerMateMoves = 0;
     let totalMateDelay = 0;
+    let largestMateDelay = 0;
     let missedForcedMates = 0;
+    let immediateMatesMissed = 0;
+    let forcedMatesLost = 0;
+    let missedMateSeverityTotal = 0;
     let nonBestWinningMoves = 0;
     let conversionMoves = 0;
+    let firstSettledPly = null;
+    let firstDecisiveEntry = null;
+    let decisiveErrorsBeforeSettled = 0;
+    let mateTransitionsBeforeSettled = 0;
+    let worstPreSettledScoringLoss = 0;
+    const preSettledAccuracies = [];
 
-    for (const { classification } of entries) {
+    entries.forEach(({ classification, move, index }, playerEntryIndex) => {
       const accuracy = clamp(Number(classification.accuracy), 0, 100);
       const weight = Math.max(0.05, Number(classification.decisionWeight || 1));
       const expectedLoss = Math.max(0, Number(classification.expectedPointsLoss ?? classification.loss ?? 0));
       const scoringLoss = Math.max(0, Number(classification.loss || 0));
       const conversionLoss = Math.max(0, Number(classification.conversionLoss || 0));
+      const phase = classification.phase
+        || (classification.settledWinning ? 'winning' : classification.settledLosing ? 'losing' : 'competitive');
+      const bucket = phases[phase] || phases.competitive;
+
       weightedTotal += accuracy * weight;
       weightTotal += weight;
       logTotal += Math.log(Math.max(0.01, accuracy / 100)) * weight;
@@ -371,8 +410,16 @@
       expectedLosses.push(expectedLoss);
       scoringLosses.push(scoringLoss);
       conversionLosses.push(conversionLoss);
+      bucket.weightedTotal += accuracy * weight;
+      bucket.weightTotal += weight;
+      bucket.accuracies.push(accuracy);
+      bucket.entries += 1;
+
       if (counts[classification.key] !== undefined) counts[classification.key] += 1;
-      if (classification.decisiveError) decisiveErrors += 1;
+      if (classification.decisiveError) {
+        decisiveErrors += 1;
+        if (firstDecisiveEntry === null) firstDecisiveEntry = playerEntryIndex;
+      }
       if (classification.mateTransition) mateTransitions += 1;
       if (classification.forced) forcedMoves += 1;
       if (classification.settledBefore) settledMoves += 1;
@@ -381,51 +428,110 @@
       if (classification.meaningful) meaningfulMoves += 1;
       if (classification.exactBest || classification.playedBest) exactBestMoves += 1;
       if (classification.slowerMate) slowerMateMoves += 1;
-      totalMateDelay += Math.max(0, Number(classification.mateDelay || 0));
+      const mateDelay = Math.max(0, Number(classification.mateDelay || 0));
+      totalMateDelay += mateDelay;
+      largestMateDelay = Math.max(largestMateDelay, mateDelay);
       if (classification.missedForcedMate) missedForcedMates += 1;
+      if (classification.immediateMateMissed && classification.missedForcedMate) immediateMatesMissed += 1;
+      if (classification.forcedMateLost) forcedMatesLost += 1;
+      if (classification.missedForcedMate) {
+        missedMateSeverityTotal += Math.max(0, Number(classification.missedMateSeverity || 0));
+      }
       if (classification.nonBestWinningMove) nonBestWinningMoves += 1;
       if (conversionLoss > 0) conversionMoves += 1;
-    }
+
+      if (phase !== 'competitive' && firstSettledPly === null) {
+        firstSettledPly = Number(move?.ply || index + 1);
+      }
+      if (phase === 'competitive') {
+        preSettledAccuracies.push(accuracy);
+        worstPreSettledScoringLoss = Math.max(worstPreSettledScoringLoss, scoringLoss);
+        if (classification.decisiveError) decisiveErrorsBeforeSettled += 1;
+        if (classification.mateTransition) mateTransitionsBeforeSettled += 1;
+      }
+    });
 
     const weightedMean = weightTotal ? weightedTotal / weightTotal : mean(accuracies);
     const geometricMean = weightTotal ? Math.exp(logTotal / weightTotal) * 100 : mean(accuracies);
+
+    const phaseMean = (bucket) => bucket.weightTotal
+      ? bucket.weightedTotal / bucket.weightTotal
+      : null;
+    const competitiveMean = phaseMean(phases.competitive);
+    const winningMean = phaseMean(phases.winning);
+    const losingMean = phaseMean(phases.losing);
+
+    // Long won or lost tails must not dominate the full-game score. Each phase
+    // keeps its own move quality, but the total influence of an already-won
+    // phase is capped at four full decisions and an already-lost phase at less
+    // than one. Competitive play remains uncapped.
+    const phaseCaps = { competitive: Infinity, winning: 4, losing: 0.75 };
+    let phaseWeightedTotal = 0;
+    let phaseWeightTotal = 0;
+    for (const phaseName of ['competitive', 'winning', 'losing']) {
+      const bucket = phases[phaseName];
+      if (!bucket.weightTotal) continue;
+      const usedWeight = Math.min(bucket.weightTotal, phaseCaps[phaseName]);
+      phaseWeightedTotal += (bucket.weightedTotal / bucket.weightTotal) * usedWeight;
+      phaseWeightTotal += usedWeight;
+    }
+    const phaseBaseAccuracy = phaseWeightTotal ? phaseWeightedTotal / phaseWeightTotal : weightedMean;
+
     const meaningfulAccuracies = entries
-      .filter(({ classification }) => classification.meaningful)
+      .filter(({ classification }) => classification.meaningful && !classification.settledLosing)
       .map(({ classification }) => Number(classification.accuracy));
-    const sorted = (meaningfulAccuracies.length ? meaningfulAccuracies : accuracies).slice().sort((a, b) => a - b);
+    const tailSource = preSettledAccuracies.length >= 4
+      ? preSettledAccuracies
+      : (meaningfulAccuracies.length ? meaningfulAccuracies : accuracies);
+    const sorted = tailSource.slice().sort((a, b) => a - b);
     const worstCount = Math.max(1, Math.ceil(sorted.length * 0.25));
     const worstQuartileAccuracy = mean(sorted.slice(0, worstCount));
-    // Use the weighted mean as the stable base. The older blend gave the
-    // geometric mean and worst quartile too much influence, which could punish
-    // the losing player twice for the same few decisive errors. A small tail
-    // spread penalty preserves sensitivity to bad moves without crushing the
-    // whole report.
-    const tailPenalty = Math.min(4, Math.max(0, weightedMean - worstQuartileAccuracy) * 0.02);
+    const tailPenalty = Math.min(3.5, Math.max(0, phaseBaseAccuracy - worstQuartileAccuracy) * 0.018);
 
-    // WDL saturates once a position is won, so move-level scores alone still
-    // under-punish repeated inefficient conversion. Scale the accumulated
-    // conversion loss by the number of winning-position opportunities, then add
-    // explicit penalties for missed or slower mates. This only applies while the
-    // player was already winning; it does not further punish forced defence in a
-    // lost position.
-    const conversionPenalty = settledWinningMoves > 0
-      ? Math.min(18,
-          500 * (conversionLosses.reduce((sum, value) => sum + value, 0) / settledWinningMoves)
-          + 1.25 * missedForcedMates
-          + 0.40 * slowerMateMoves
-          + 0.20 * totalMateDelay)
-      : 0;
+    // Only add a separate critical-error adjustment for decisive mistakes made
+    // while the game was still competitive. Move-level accuracy already
+    // contains the basic loss, so this is intentionally restrained and focuses
+    // on severity/count rather than charging every blunder again.
+    const criticalErrorPenalty = Math.min(8,
+      Math.max(0, worstPreSettledScoringLoss - 0.20) * 9
+      + Math.max(0, decisiveErrorsBeforeSettled - 1) * 0.75
+      + mateTransitionsBeforeSettled * 1.25);
 
-    const accuracy = clamp(weightedMean - tailPenalty - conversionPenalty, 0, 100);
+    // Do not subtract generic conversion loss again: it already lowered each
+    // move's accuracy. Add only event-level penalties whose severity WDL cannot
+    // express well after saturation—especially missed immediate mates.
+    const nonImmediateMissSeverity = Math.max(0, missedMateSeverityTotal - immediateMatesMissed);
+    const mateMissPenalty = Math.min(16,
+      immediateMatesMissed * 8
+      + nonImmediateMissSeverity * 5
+      + slowerMateMoves * 0.35
+      + totalMateDelay * 0.18);
+
+    const accuracy = clamp(
+      phaseBaseAccuracy - tailPenalty - criticalErrorPenalty - mateMissPenalty,
+      0,
+      100
+    );
 
     const sortedExpectedLosses = expectedLosses.slice().sort((a, b) => b - a);
     const sortedScoringLosses = scoringLosses.slice().sort((a, b) => b - a);
+    const movesAfterFirstDecisiveError = firstDecisiveEntry === null
+      ? 0
+      : Math.max(0, entries.length - firstDecisiveEntry - 1);
+
     return {
       accuracy,
-      baseAccuracy: weightedMean,
+      baseAccuracy: phaseBaseAccuracy,
+      phaseBaseAccuracy,
       tailPenalty,
-      conversionPenalty,
+      criticalErrorPenalty,
+      mateMissPenalty,
+      // Compatibility alias for older UI/debug consumers.
+      conversionPenalty: mateMissPenalty,
       weightedMeanAccuracy: weightedMean,
+      competitiveMeanAccuracy: competitiveMean,
+      winningConversionAccuracy: winningMean,
+      losingPhaseAccuracy: losingMean,
       geometricMeanAccuracy: geometricMean,
       worstQuartileAccuracy,
       meanMoveAccuracy: mean(accuracies),
@@ -445,11 +551,23 @@
       settledMoves,
       settledWinningMoves,
       settledLosingMoves,
+      competitiveMoves: phases.competitive.entries,
+      winningPhaseMoves: phases.winning.entries,
+      losingPhaseMoves: phases.losing.entries,
+      firstSettledPly,
       decisiveErrors,
+      decisiveErrorsBeforeSettled,
       mateTransitions,
+      mateTransitionsBeforeSettled,
+      worstPreSettledScoringLoss,
+      movesAfterFirstDecisiveError,
       slowerMateMoves,
       totalMateDelay,
+      largestMateDelay,
       missedForcedMates,
+      immediateMatesMissed,
+      forcedMatesLost,
+      missedMateSeverityTotal,
       nonBestWinningMoves,
       conversionMoves,
       counts

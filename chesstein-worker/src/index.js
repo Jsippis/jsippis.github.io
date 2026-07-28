@@ -90,6 +90,11 @@ function optionalInteger(value, min, max, name) {
   return Math.round(finiteNumber(value, min, max, name));
 }
 
+function optionalFiniteNumber(value, min, max, name) {
+  if (value === null || value === undefined || value === '') return null;
+  return finiteNumber(value, min, max, name);
+}
+
 function safeText(value, maxLength, name) {
   const text = String(value || '').trim();
   if (!text || text.length > maxLength) throw new Error(`${name} is invalid.`);
@@ -149,6 +154,24 @@ function parseCalibrationSample(body) {
     nonBestWinningMoves: Math.round(finiteNumber(features.nonBestWinningMoves ?? 0, 0, 1000, 'nonBestWinningMoves')),
     conversionMoves: Math.round(finiteNumber(features.conversionMoves ?? 0, 0, 1000, 'conversionMoves')),
     meaningfulMoves: Math.round(finiteNumber(features.meaningfulMoves, 0, 1000, 'meaningfulMoves')),
+    phaseBaseAccuracy: finiteNumber(features.phaseBaseAccuracy ?? features.weightedMeanAccuracy, 0, 100, 'phaseBaseAccuracy'),
+    competitiveMeanAccuracy: optionalFiniteNumber(features.competitiveMeanAccuracy, 0, 100, 'competitiveMeanAccuracy'),
+    winningConversionAccuracy: optionalFiniteNumber(features.winningConversionAccuracy, 0, 100, 'winningConversionAccuracy'),
+    losingPhaseAccuracy: optionalFiniteNumber(features.losingPhaseAccuracy, 0, 100, 'losingPhaseAccuracy'),
+    competitiveMoves: Math.round(finiteNumber(features.competitiveMoves ?? 0, 0, 1000, 'competitiveMoves')),
+    winningPhaseMoves: Math.round(finiteNumber(features.winningPhaseMoves ?? 0, 0, 1000, 'winningPhaseMoves')),
+    losingPhaseMoves: Math.round(finiteNumber(features.losingPhaseMoves ?? 0, 0, 1000, 'losingPhaseMoves')),
+    firstSettledPly: optionalInteger(features.firstSettledPly, 1, 2000, 'firstSettledPly'),
+    decisiveErrorsBeforeSettled: Math.round(finiteNumber(features.decisiveErrorsBeforeSettled ?? 0, 0, 1000, 'decisiveErrorsBeforeSettled')),
+    mateTransitionsBeforeSettled: Math.round(finiteNumber(features.mateTransitionsBeforeSettled ?? 0, 0, 1000, 'mateTransitionsBeforeSettled')),
+    worstPreSettledScoringLoss: finiteNumber(features.worstPreSettledScoringLoss ?? 0, 0, 1, 'worstPreSettledScoringLoss'),
+    movesAfterFirstDecisiveError: Math.round(finiteNumber(features.movesAfterFirstDecisiveError ?? 0, 0, 1000, 'movesAfterFirstDecisiveError')),
+    immediateMatesMissed: Math.round(finiteNumber(features.immediateMatesMissed ?? 0, 0, 1000, 'immediateMatesMissed')),
+    forcedMatesLost: Math.round(finiteNumber(features.forcedMatesLost ?? 0, 0, 1000, 'forcedMatesLost')),
+    largestMateDelay: Math.round(finiteNumber(features.largestMateDelay ?? 0, 0, 10000, 'largestMateDelay')),
+    missedMateSeverityTotal: finiteNumber(features.missedMateSeverityTotal ?? 0, 0, 1000, 'missedMateSeverityTotal'),
+    criticalErrorPenalty: finiteNumber(features.criticalErrorPenalty ?? 0, 0, 100, 'criticalErrorPenalty'),
+    mateMissPenalty: finiteNumber(features.mateMissPenalty ?? 0, 0, 100, 'mateMissPenalty'),
     chesscomAccuracy: finiteNumber(body?.chesscomAccuracy, 0, 100, 'chesscomAccuracy'),
     chessteinAccuracy: finiteNumber(body?.chessteinAccuracy, 0, 100, 'chessteinAccuracy'),
     createdAt: new Date(createdAt).toISOString(),
@@ -170,8 +193,14 @@ async function storeCalibrationSample(env, sample) {
       slower_mate_moves, total_mate_delay, missed_forced_mates,
       forced_moves, settled_moves, settled_winning_moves, settled_losing_moves,
       non_best_winning_moves, conversion_moves, meaningful_moves,
+      phase_base_accuracy, competitive_mean_accuracy, winning_conversion_accuracy,
+      losing_phase_accuracy, competitive_moves, winning_phase_moves, losing_phase_moves,
+      first_settled_ply, decisive_errors_before_settled, mate_transitions_before_settled,
+      worst_pre_settled_scoring_loss, moves_after_first_decisive_error,
+      immediate_mates_missed, forced_mates_lost, largest_mate_delay,
+      missed_mate_severity_total, critical_error_penalty, mate_miss_penalty,
       chesscom_accuracy, chesstein_accuracy, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (${Array(60).fill('?').join(', ')})
   `).bind(
     sample.sampleId, sample.gameHash, sample.playerColor, sample.ratingBucket,
     sample.timeClass, sample.moveCount, sample.engineVersion, sample.analysisProfile,
@@ -185,6 +214,14 @@ async function storeCalibrationSample(env, sample) {
     sample.totalMateDelay, sample.missedForcedMates, sample.forcedMoves,
     sample.settledMoves, sample.settledWinningMoves, sample.settledLosingMoves,
     sample.nonBestWinningMoves, sample.conversionMoves, sample.meaningfulMoves,
+    sample.phaseBaseAccuracy, sample.competitiveMeanAccuracy,
+    sample.winningConversionAccuracy, sample.losingPhaseAccuracy,
+    sample.competitiveMoves, sample.winningPhaseMoves, sample.losingPhaseMoves,
+    sample.firstSettledPly, sample.decisiveErrorsBeforeSettled,
+    sample.mateTransitionsBeforeSettled, sample.worstPreSettledScoringLoss,
+    sample.movesAfterFirstDecisiveError, sample.immediateMatesMissed,
+    sample.forcedMatesLost, sample.largestMateDelay, sample.missedMateSeverityTotal,
+    sample.criticalErrorPenalty, sample.mateMissPenalty,
     sample.chesscomAccuracy, sample.chessteinAccuracy, sample.createdAt
   ).run();
 }

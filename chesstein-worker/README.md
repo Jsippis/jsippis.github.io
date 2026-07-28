@@ -228,11 +228,13 @@ Apply the table migration locally for development:
 npm run d1:migrate:local
 ```
 
-Apply it to the production database:
+Apply all pending migrations to the production database:
 
 ```powershell
 npm run d1:migrate:remote
 ```
+
+The phase-aware analysis pass adds `0003_phase_aware_features.sql`. Wrangler applies only migrations that have not already run.
 
 Then deploy the Worker:
 

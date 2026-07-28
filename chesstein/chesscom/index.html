@@ -926,7 +926,7 @@
     </section>
   </main>
 
-<script src="../shared/analysis_core.js?v=9-contextual-v5"></script>
+<script src="../shared/analysis_core.js?v=10-phase-aware-v6"></script>
 <script src="../shared/review_engine.js?v=8-engine-isolation"></script>
 <script src="../shared/pgn_parser.js"></script>
 <script src="../shared/chesscom_api.js"></script>
@@ -939,7 +939,7 @@ const PIECE_FALLBACK = {
 const PIECE_ASSET_ROOT = '../gui/assets/pieces/cburnett/';
 const GAME_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_STORED_ANALYSES = 8;
-const REPORT_CACHE_VERSION = 'v8-contextual-engine-isolation';
+const REPORT_CACHE_VERSION = 'v9-phase-aware-v6';
 const ENGINE_VERSION = 'stockfish-18-lite-single';
 const CALIBRATION_ENDPOINT = 'https://chesstein.jospire1.workers.dev/api/calibration';
 const CALIBRATION_OPT_IN_KEY = 'chesstein:calibration:opt-in:v1';
@@ -1082,7 +1082,25 @@ async function buildCalibrationSample(color, summary, gameHash) {
       settledLosingMoves: summary.settledLosingMoves,
       nonBestWinningMoves: summary.nonBestWinningMoves,
       conversionMoves: summary.conversionMoves,
-      meaningfulMoves: summary.meaningfulMoves
+      meaningfulMoves: summary.meaningfulMoves,
+      phaseBaseAccuracy: summary.phaseBaseAccuracy,
+      competitiveMeanAccuracy: summary.competitiveMeanAccuracy,
+      winningConversionAccuracy: summary.winningConversionAccuracy,
+      losingPhaseAccuracy: summary.losingPhaseAccuracy,
+      competitiveMoves: summary.competitiveMoves,
+      winningPhaseMoves: summary.winningPhaseMoves,
+      losingPhaseMoves: summary.losingPhaseMoves,
+      firstSettledPly: summary.firstSettledPly,
+      decisiveErrorsBeforeSettled: summary.decisiveErrorsBeforeSettled,
+      mateTransitionsBeforeSettled: summary.mateTransitionsBeforeSettled,
+      worstPreSettledScoringLoss: summary.worstPreSettledScoringLoss,
+      movesAfterFirstDecisiveError: summary.movesAfterFirstDecisiveError,
+      immediateMatesMissed: summary.immediateMatesMissed,
+      forcedMatesLost: summary.forcedMatesLost,
+      largestMateDelay: summary.largestMateDelay,
+      missedMateSeverityTotal: summary.missedMateSeverityTotal,
+      criticalErrorPenalty: summary.criticalErrorPenalty,
+      mateMissPenalty: summary.mateMissPenalty
     },
     chesscomAccuracy,
     chessteinAccuracy: summary.accuracy,
